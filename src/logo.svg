@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="ConvertPicto">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded tile -->
+  <rect width="64" height="64" rx="16" fill="url(#g)"/>
+  <!-- picture card, top-left -->
+  <rect x="12" y="13" width="22" height="18" rx="4" fill="#fff"/>
+  <circle cx="19" cy="19.5" r="2.4" fill="#8b5cf6"/>
+  <path d="M14.5 28.5l5.5-6 3.5 3.5 3.5-4.5 4.5 7z" fill="#6366f1"/>
+  <!-- converted card, bottom-right (outline = "new format") -->
+  <rect x="30" y="33" width="22" height="18" rx="4" fill="none" stroke="#fff" stroke-width="3.2"/>
+  <!-- convert arrows: two curved arrows exchanging -->
+  <g fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M40 14c7 0 11 4 11 10"/>
+    <path d="M47 21l4 3.5 3.5-4.5"/>
+    <path d="M24 50c-7 0-11-4-11-10"/>
+    <path d="M17 43l-4-3.5-3.5 4.5"/>
+  </g>
+</svg>
