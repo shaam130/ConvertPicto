@@ -119,7 +119,7 @@ Browsers render an SVG with no explicit `width`/`height` at 300×150, regardless
 Requires Python 3.8+. No packages needed to build.
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/convertpicto.git
+git clone https://github.com/shaam130/ConvertPicto.git
 cd convertpicto
 python3 build.py
 ```
