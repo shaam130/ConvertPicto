@@ -309,7 +309,7 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-
 /* ---------- footer ---------- */
 footer.site { border-top: 1px solid var(--border); background: var(--bg-2); margin-top: 72px; }
 .foot { max-width: 1160px; margin: 0 auto; padding: 44px 24px 30px; display: grid; grid-template-columns: 1.5fr repeat(4, 1fr); gap: 28px; font-size: .86rem; }
-.foot h4 { margin: 0 0 12px; font-size: .74rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); }
+.foot h3, .foot h4 { margin: 0 0 12px; font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); }
 .foot ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
 .foot a { color: var(--text-2); text-decoration: none; } .foot a:hover { color: var(--accent-text); }
 .foot .about p { color: var(--text-muted); margin: 10px 0 0; max-width: 34ch; }
@@ -330,12 +330,16 @@ footer.site { border-top: 1px solid var(--border); background: var(--bg-2); marg
 
 /* ---------- blog ---------- */
 .post-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-top: 8px; }
-.post-card { display: block; text-decoration: none; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 20px; transition: transform .18s, border-color .18s, box-shadow .18s; }
+.post-card { display: block; text-decoration: none; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 0; overflow: hidden; transition: transform .18s, border-color .18s, box-shadow .18s; }
 .post-card:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: var(--shadow-lg); }
 .post-card .t { font-weight: 700; font-size: 1.02rem; letter-spacing: -.015em; line-height: 1.25; }
 .post-card .d { color: var(--text-muted); font-size: .88rem; margin-top: 7px; }
 .post-card .m { color: var(--text-muted); font-size: .78rem; margin-top: 12px; }
-.post-card.lg { padding: 24px; }
+.post-card .pc-img { display: block; width: 100%; height: auto; aspect-ratio: 1200 / 630; object-fit: cover; background: var(--surface-2); }
+.post-card .pc-body { padding: 18px 20px 20px; }
+.post-card.lg .pc-body { padding: 20px 24px 24px; }
+.post-cover { margin: 0 0 22px; }
+.post-cover img { display: block; width: 100%; height: auto; aspect-ratio: 1200 / 630; border-radius: var(--r-lg); border: 1px solid var(--border); background: var(--surface-2); }
 .post-card.lg .t { font-size: 1.18rem; }
 
 .post-meta { color: var(--text-muted); font-size: .86rem; margin: -4px 0 22px; }
@@ -379,3 +383,42 @@ footer.site { border-top: 1px solid var(--border); background: var(--bg-2); marg
 
 /* Blog index section heading */
 .sr-head{font-size:.82rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0 0 14px}
+
+.foot .about .fmail { display: inline-block; margin-top: 12px; color: var(--text-2); text-decoration: none; border-bottom: 1px solid var(--border); }
+.foot .about .fmail:hover { color: var(--accent-text); border-bottom-color: var(--accent); }
+.chips-inline{display:inline-flex;gap:6px;flex-wrap:wrap;margin-left:8px;vertical-align:middle}
+
+.av { flex: none; width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; letter-spacing: .02em; background: linear-gradient(135deg, #6366f1, #a855f7); }
+.av.lg { width: 96px; height: 96px; font-size: 1.9rem; }
+.author-head { display: flex; gap: 22px; align-items: center; margin: 8px 0 28px; }
+.author-head h1 { margin: 2px 0 0; }
+.author-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.author-box { display: flex; gap: 16px; align-items: flex-start; margin: 36px 0 8px; padding: 20px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-2); max-width: 72ch; }
+.author-box .lbl { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; }
+.author-box .nm { font-weight: 700; font-size: 1.05rem; margin-top: 2px; }
+.author-box p { margin: 6px 0 8px; color: var(--text-2); font-size: .93rem; }
+.author-box .more { font-weight: 600; font-size: .9rem; }
+@media (max-width: 560px) { .author-head { flex-direction: column; align-items: flex-start; } }
+
+/* combine images into one PDF: ordered page list */
+.pages-panel { margin: 14px 0 4px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.pages-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 10px; }
+.pages-head .hint { flex: 1 1 220px; color: var(--text-muted); font-size: .85rem; }
+.pages-tools { display: flex; gap: 6px; }
+.pages-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.page-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r-sm, 10px); background: var(--bg, transparent); }
+.page-no { flex: 0 0 24px; text-align: center; font-weight: 600; color: var(--text-muted); font-size: .85rem; }
+.page-thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; background: var(--border); flex: 0 0 44px; }
+.page-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9rem; }
+.page-btn { flex: 0 0 34px; height: 34px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; cursor: pointer; font-size: 1.05rem; line-height: 1; }
+.page-btn:hover:not(:disabled) { border-color: var(--accent, currentColor); }
+.page-btn:disabled { opacity: .35; cursor: default; }
+.page-btn[data-act="remove"]:hover { background: var(--danger-bg); color: var(--danger); }
+.pages-list { grid-template-columns: minmax(0, 1fr); }
+.page-item { min-width: 0; }
+@media (max-width: 480px) {
+  .page-item { gap: 6px; padding: 6px; }
+  .page-thumb { width: 36px; height: 36px; flex-basis: 36px; }
+  .page-btn { flex-basis: 32px; width: 32px; height: 32px; }
+  .page-no { flex-basis: 16px; }
+}

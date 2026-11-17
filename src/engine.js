@@ -33,6 +33,7 @@
   const el = (tag, attrs, children) => {
     const n = document.createElement(tag);
     if (attrs) for (const k in attrs) {
+      if (attrs[k] == null) continue;
       if (k === 'class') n.className = attrs[k];
       else if (k === 'html') n.innerHTML = attrs[k];
       else if (k === 'text') n.textContent = attrs[k];
@@ -121,6 +122,110 @@
         else reject(new Error("Your browser can't export " + mime.replace('image/', '').toUpperCase() + ' — try the latest Chrome, Firefox, or Edge'));
       }, mime, quality);
     });
+  }
+
+  /* ---------- noise reduction (edge-preserving bilateral filter) ---------- */
+  // Each pixel becomes a weighted average of its neighbours. A neighbour counts less the further away it is
+  // AND the more different its colour is, so flat areas (where grain lives) are smoothed while edges stay put.
+  const DENOISE = {
+    light:  { radius: 2, sigmaS: 1.5, sigmaR: 25 },
+    medium: { radius: 3, sigmaS: 2,   sigmaR: 45 },
+    strong: { radius: 4, sigmaS: 2.6, sigmaR: 70 },
+  };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  async function denoiseImageData(img, opt, isStale) {
+    const w = img.width, h = img.height, data = img.data, out = new Uint8ClampedArray(data.length);
+    const radius = opt.radius, side = 2 * radius + 1, ws = new Float32Array(side * side), lut = new Float32Array(766);
+    for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) ws[(dy + radius) * side + dx + radius] = Math.exp(-(dx * dx + dy * dy) / (2 * opt.sigmaS * opt.sigmaS));
+    for (let d = 0; d < 766; d++) lut[d] = Math.exp(-(d * d) / (2 * opt.sigmaR * opt.sigmaR));
+    let last = performance.now();
+    for (let y = 0; y < h; y++) {
+      const y0 = Math.max(0, y - radius), y1 = Math.min(h - 1, y + radius);
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4, r0 = data[i], g0 = data[i + 1], b0 = data[i + 2];
+        const x0 = Math.max(0, x - radius), x1 = Math.min(w - 1, x + radius);
+        let sr = 0, sg = 0, sb = 0, sw = 0;
+        for (let yy = y0; yy <= y1; yy++) {
+          let j = (yy * w + x0) * 4, k = (yy - y + radius) * side + (x0 - x + radius);
+          for (let xx = x0; xx <= x1; xx++, j += 4, k++) {
+            const r = data[j], g = data[j + 1], b = data[j + 2];
+            const wt = ws[k] * lut[Math.abs(r - r0) + Math.abs(g - g0) + Math.abs(b - b0)];
+            sr += r * wt; sg += g * wt; sb += b * wt; sw += wt;
+          }
+        }
+        out[i] = sr / sw; out[i + 1] = sg / sw; out[i + 2] = sb / sw; out[i + 3] = data[i + 3];
+      }
+      if (performance.now() - last > 40) {   // keep the page responsive on big photos
+        await tick(); last = performance.now();
+        if (isStale && isStale()) throw new Error('superseded');
+      }
+    }
+    return new ImageData(out, w, h);
+  }
+
+  /* ---------- compress to a target file size ---------- */
+  // Finds the highest JPEG quality (50-95%) that fits under the target. Only if even 50% is too big
+  // does it shrink the pixel dimensions, in as small a step as possible.
+  async function encodeToTarget(src, opts, targetBytes) {
+    const MINQ = 0.5, MAXQ = 0.95;
+    const baseW = opts.width || src.width, baseH = opts.height || src.height;
+    const at = (scale) => buildCanvas(src, Object.assign({}, opts, { width: Math.max(1, Math.round(baseW * scale)), height: Math.max(1, Math.round(baseH * scale)) }));
+    let scale = 1, canvas = at(scale), blob = await encodeNative(canvas, 'image/jpeg', MINQ);
+    for (let i = 0; i < 14 && blob.size > targetBytes && Math.min(canvas.width, canvas.height) > 24; i++) {
+      scale *= Math.max(0.5, Math.min(0.93, Math.sqrt(targetBytes / blob.size) * 0.97));
+      canvas = at(scale); blob = await encodeNative(canvas, 'image/jpeg', MINQ);
+    }
+    if (blob.size > targetBytes) {           // cannot reach it: return the smallest sensible attempt
+      blob = await encodeNative(canvas, 'image/jpeg', 0.3);
+      return { blob, canvas, quality: 30, met: blob.size <= targetBytes, scaled: scale < 1 };
+    }
+    let lo = MINQ, hi = MAXQ, best = { blob, q: MINQ };
+    const top = await encodeNative(canvas, 'image/jpeg', MAXQ);
+    if (top.size <= targetBytes) best = { blob: top, q: MAXQ };
+    else for (let i = 0; i < 7; i++) {
+      const mid = (lo + hi) / 2, b = await encodeNative(canvas, 'image/jpeg', mid);
+      if (b.size <= targetBytes) { best = { blob: b, q: mid }; lo = mid; } else hi = mid;
+    }
+    return { blob: best.blob, canvas, quality: Math.round(best.q * 100), met: true, scaled: scale < 1 };
+  }
+
+  /* ---------- WebP via libwebp (WebAssembly), for lossless output and as a fallback ----------
+     The browser's own WebP export is lossy-only in some browsers and, in the ones that can do lossless, a fast
+     low-effort encoder. libwebp at full effort is much smaller for graphics. Runs in a worker, loaded on demand. */
+  let webpWorker = null, webpSeq = 0;
+  const webpPending = new Map();
+  function getWebpWorker() {
+    if (webpWorker) return webpWorker;
+    const w = new Worker('/vendor/webp/webp-worker.js', { type: 'module' });
+    w.onmessage = (e) => {
+      const p = webpPending.get(e.data.id); if (!p) return;
+      webpPending.delete(e.data.id);
+      if (e.data.ok) p.res(new Blob([e.data.buf], { type: 'image/webp' })); else p.rej(new Error(e.data.error));
+    };
+    w.onerror = () => { webpPending.forEach((p) => p.rej(new Error('The WebP encoder could not be loaded'))); webpPending.clear(); try { w.terminate(); } catch (_) {} webpWorker = null; };
+    return (webpWorker = w);
+  }
+  function encodeWebpWasm(canvas, quality, lossless) {
+    return new Promise((res, rej) => {
+      let worker;
+      try { worker = getWebpWorker(); } catch (err) { return rej(err); }
+      const img = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+      const px = canvas.width * canvas.height;
+      // effort 4: under about a second on typical images. Effort 6 saves a further 0-14% but is 6-10x slower on photos and screenshots.
+      const options = lossless ? { lossless: 1, quality: 100, method: px <= 8e6 ? 4 : 2 } : { lossless: 0, quality: Math.round(quality * 100), method: 4 };
+      const id = ++webpSeq;
+      webpPending.set(id, { res, rej });
+      worker.postMessage({ id, buf: img.data.buffer, width: canvas.width, height: canvas.height, options }, [img.data.buffer]);
+    });
+  }
+  // WebP encoder choice: quality 100% means lossless (libwebp); otherwise the browser's own encoder, with libwebp as the fallback.
+  async function encodeWebp(canvas, quality) {
+    if (quality >= 1) {
+      try { return await encodeWebpWasm(canvas, quality, true); } catch (_) { /* fall back to the browser's encoder */ }
+      return encodeNative(canvas, 'image/webp', 1);
+    }
+    try { return await encodeNative(canvas, 'image/webp', quality); }
+    catch (err) { try { return await encodeWebpWasm(canvas, quality, false); } catch (_) { throw err; } }
   }
   const blobBytes = async (blob) => new Uint8Array(await blob.arrayBuffer());
 
@@ -416,9 +521,14 @@
   };
   if (cfg.mode === 'compress' && cfg.format === 'png') state.quality = 100;
   if (cfg.mode === 'pdf') state.quality = 90;
+  if (cfg.mode === 'denoise') state.quality = 90;
+  state.strength = 'medium';
+  state.pages = [];          // 'combine images into one PDF': the pages, in the order they will appear
+  state.targetKb = cfg.targetKb || 0;   // 'compress to N KB' pages: quality and size are searched automatically
 
   const NOTES = {
     ico: 'ICO bundles several sizes into one favicon file — transparency is preserved.',
+    webp: 'At 100% quality WebP is lossless: opaque pixels are identical to the original, and for screenshots, charts and logos the file is usually much smaller than PNG.',
     bmp: 'BMP is uncompressed: files will be much larger than PNG or JPG. Use it only when a program specifically needs BMP.',
   };
 
@@ -448,17 +558,25 @@
       el('input', { type: 'file', id: 'fileInput', accept: 'image/*,.svg,.avif,.ico,.bmp', multiple: '', hidden: '' }),
     ]));
 
+    if (cfg.reorder) root.appendChild(el('div', { class: 'pages-panel', id: 'pagesPanel', hidden: '' }));
+
     const controls = el('div', { class: 'controls' });
     const mode = cfg.mode;
-    const showFormatPicker = mode === 'convert' || mode === 'resize' || mode === 'rotate' || mode === 'flip' || mode === 'grayscale';
+    const showFormatPicker = mode === 'convert' || mode === 'resize' || mode === 'rotate' || mode === 'flip' || mode === 'grayscale' || mode === 'denoise';
+
+    if (mode === 'denoise') {
+      const sg = el('div', { class: 'format-picker', role: 'group', 'aria-label': 'Noise reduction strength' });
+      [['light', 'Light'], ['medium', 'Medium'], ['strong', 'Strong']].forEach(([k, t]) => sg.appendChild(el('button', { type: 'button', class: 'format-btn' + (state.strength === k ? ' active' : ''), 'data-strength': k, text: t, onclick: () => { state.strength = k; sg.querySelectorAll('.format-btn').forEach((b) => b.classList.toggle('active', b.dataset.strength === k)); scheduleReprocess(0); } })));
+      controls.appendChild(el('div', { class: 'control-group' }, [el('label', { text: 'Strength' }), sg, el('span', { class: 'hint', text: 'Start with Medium. Strong removes more grain but softens fine detail.' })]));
+    }
 
     if (showFormatPicker) {
       const picker = el('div', { class: 'format-picker', role: 'group', 'aria-label': 'Output format' });
-      OUTPUT_ORDER.forEach((k) => picker.appendChild(el('button', {
+      OUTPUT_ORDER.filter((k) => mode !== 'denoise' || ['png', 'jpg', 'webp'].includes(k)).forEach((k) => picker.appendChild(el('button', {
         type: 'button', class: 'format-btn' + (state.to === k ? ' active' : ''), 'data-format': k, text: FORMATS[k].label,
         onclick: () => { state.to = k; render(); scheduleReprocess(0); },
       })));
-      controls.appendChild(el('div', { class: 'control-group' }, [el('label', { text: 'Convert to' }), picker]));
+      controls.appendChild(el('div', { class: 'control-group' }, [el('label', { text: mode === 'denoise' ? 'Save as' : 'Convert to' }), picker]));
     }
 
     if (mode === 'resize') {
@@ -502,7 +620,7 @@
         controls.appendChild(el('div', { class: 'control-group' }, [el('label', { text: 'Layout' }), orient, el('span', { class: 'unit', text: 'margin' }), margin, el('span', { class: 'unit', text: 'pt' })]));
       }
       const combine = el('input', { type: 'checkbox', id: 'combine', onchange: (e) => { state.combine = e.target.checked; const files = allSourceFiles(); clearResults(); if (files.length) handleFiles(files); } }); combine.checked = state.combine;
-      controls.appendChild(el('div', { class: 'control-group' }, [el('label', { class: 'check', for: 'combine' }, [combine, ' Combine all images into one PDF'])]));
+      if (!cfg.reorder) controls.appendChild(el('div', { class: 'control-group' }, [el('label', { class: 'check', for: 'combine' }, [combine, ' Combine all images into one PDF'])]));
     }
 
     // quality / colors
@@ -513,6 +631,11 @@
       const dither = el('input', { type: 'checkbox', id: 'dither', onchange: (e) => { state.dither = e.target.checked; scheduleReprocess(0); } }); dither.checked = state.dither;
       controls.appendChild(el('div', { class: 'control-group' }, [el('label', { text: 'Palette' }), colors, el('span', { id: 'colorsValue', class: 'val', text: state.colors + ' colors' })]));
       controls.appendChild(el('div', { class: 'control-group' }, [el('label', { class: 'check', for: 'dither' }, [dither, ' Dithering (smoother gradients)'])]));
+    } else if (mode === 'compress' && state.targetKb) {
+      const t = el('input', { type: 'number', min: '1', max: '20000', value: state.targetKb, id: 'targetKb', class: 'num', 'aria-label': 'Target size in KB', oninput: (e) => { state.targetKb = Math.max(1, Number(e.target.value) || 0) || state.targetKb; scheduleReprocess(450); } });
+      const presets = el('div', { class: 'chips-inline' });
+      [20, 50, 100, 200, 500].forEach((n) => presets.appendChild(el('button', { type: 'button', class: 'chip', text: n + ' KB', onclick: () => { state.targetKb = n; t.value = n; scheduleReprocess(0); } })));
+      controls.appendChild(el('div', { class: 'control-group' }, [el('label', { text: 'Target size' }), t, el('span', { class: 'unit', text: 'KB or less' }), presets]));
     } else if (effectiveTarget && FORMATS[effectiveTarget] && FORMATS[effectiveTarget].lossy) {
       const q = el('input', { type: 'range', min: '10', max: '100', value: state.quality, oninput: (e) => { state.quality = Number(e.target.value); $('#qualityValue').textContent = state.quality + '%'; scheduleReprocess(); } });
       controls.appendChild(el('div', { class: 'control-group' }, [el('label', { text: 'Quality' }), q, el('span', { id: 'qualityValue', class: 'val', text: state.quality + '%' })]));
@@ -551,6 +674,7 @@
 
     wireDropzone();
     if (state.results.length) state.results.forEach((r) => $('#resultsList').appendChild(r.row));
+    renderPages();
     refreshHead();
   }
 
@@ -588,6 +712,7 @@
     if (r.srcs) r.srcs.forEach((s) => s.url && URL.revokeObjectURL(s.url));
   }
   function removeResult(r) {
+    if (cfg.reorder) { clearResults(); return; }
     releaseResult(r);
     state.results = state.results.filter((x) => x !== r);
     r.row.remove();
@@ -596,6 +721,7 @@
   function clearResults() {
     state.results.forEach(releaseResult);
     state.results = [];
+    if (cfg.reorder) { state.pages = []; renderPages(); }
     $('#resultsList').innerHTML = '';
     refreshHead();
   }
@@ -701,13 +827,102 @@
       blob = await encodeIco(src, sizes);
       meta = sizes.map((s) => s + 'px').join(', ');
     } else {
+      if (mode === 'compress' && state.targetKb && target === 'jpg') {
+        const limit = state.targetKb * 1024;
+        if (file.size <= limit && /jpe?g/i.test(file.type || file.name)) {
+          return { blob: file, name: baseName(file.name) + '.jpg', meta: src.width + '×' + src.height + ' · already under ' + state.targetKb + ' KB, left unchanged' };
+        }
+        const res = await encodeToTarget(src, opts, limit);
+        meta = res.canvas.width + '×' + res.canvas.height + ' · quality ' + res.quality + '%' + (res.met ? (res.scaled ? ' · scaled down to fit' : '') : ' · could not reach ' + state.targetKb + ' KB, this is the smallest it can go');
+        return { blob: res.blob, name: baseName(file.name) + '.jpg', meta };
+      }
       const canvas = buildCanvas(src, opts);
       meta = canvas.width + '×' + canvas.height;
+      if (mode === 'denoise') {
+        const token = (file.__dn = (file.__dn || 0) + 1);
+        const ctx = canvas.getContext('2d');
+        const cleaned = await denoiseImageData(ctx.getImageData(0, 0, canvas.width, canvas.height), DENOISE[state.strength] || DENOISE.medium, () => file.__dn !== token);
+        ctx.putImageData(cleaned, 0, 0);
+        meta += ' · ' + state.strength + ' noise reduction';
+      }
       if (mode === 'compress' && target === 'png') blob = await encodeIndexedPng(canvas, state.colors, state.dither);
       else if (target === 'bmp') blob = encodeBmp(canvas);
+      else if (target === 'webp') blob = await encodeWebp(canvas, state.quality / 100);
       else blob = await encodeNative(canvas, fmt.mime, fmt.lossy ? state.quality / 100 : undefined);
     }
     return { blob, name: baseName(file.name) + '.' + fmt.ext, meta };
+  }
+
+  /* ---------- combine images into one PDF: an ordered page list ---------- */
+  function renderPages() {
+    const panel = $('#pagesPanel');
+    if (!panel) return;
+    panel.innerHTML = '';
+    panel.hidden = state.pages.length === 0;
+    if (!state.pages.length) return;
+    const n = state.pages.length;
+    panel.appendChild(el('div', { class: 'pages-head' }, [
+      el('strong', { text: n + (n === 1 ? ' page' : ' pages') }),
+      el('span', { class: 'hint', text: 'Use the arrows to change the order. Drop more images to add pages.' }),
+      el('div', { class: 'pages-tools' }, [
+        el('button', { type: 'button', class: 'chip', id: 'sortNameBtn', text: 'Sort by name', onclick: () => { state.pages.sort((a, b) => a.file.name.localeCompare(b.file.name, undefined, { numeric: true })); changedPages(); } }),
+        el('button', { type: 'button', class: 'chip', id: 'reverseBtn', text: 'Reverse', onclick: () => { state.pages.reverse(); changedPages(); } }),
+      ]),
+    ]));
+    const list = el('ol', { class: 'pages-list' });
+    state.pages.forEach((pg, i) => {
+      list.appendChild(el('li', { class: 'page-item', 'data-index': String(i) }, [
+        el('span', { class: 'page-no', text: String(i + 1) }),
+        el('img', { class: 'page-thumb', src: pg.src.url, alt: '' }),
+        el('span', { class: 'page-name', text: pg.file.name }),
+        el('button', { type: 'button', class: 'page-btn', 'data-act': 'up', title: 'Move up', 'aria-label': 'Move ' + pg.file.name + ' up', html: '&uarr;', disabled: i === 0 ? '' : null, onclick: () => movePage(i, -1) }),
+        el('button', { type: 'button', class: 'page-btn', 'data-act': 'down', title: 'Move down', 'aria-label': 'Move ' + pg.file.name + ' down', html: '&darr;', disabled: i === n - 1 ? '' : null, onclick: () => movePage(i, 1) }),
+        el('button', { type: 'button', class: 'page-btn', 'data-act': 'remove', title: 'Remove page', 'aria-label': 'Remove ' + pg.file.name, html: '&times;', onclick: () => removePage(i) }),
+      ]));
+    });
+    panel.appendChild(list);
+  }
+  function movePage(i, d) {
+    const j = i + d;
+    if (j < 0 || j >= state.pages.length) return;
+    const t = state.pages[i]; state.pages[i] = state.pages[j]; state.pages[j] = t;
+    changedPages();
+  }
+  function removePage(i) {
+    const [gone] = state.pages.splice(i, 1);
+    if (gone && gone.src && gone.src.url) URL.revokeObjectURL(gone.src.url);
+    changedPages();
+  }
+  function resetPages() {
+    state.pages.forEach((pg) => pg.src && pg.src.url && URL.revokeObjectURL(pg.src.url));
+    state.pages = [];
+  }
+  // Keeps the single PDF result in step with the page list.
+  function changedPages() {
+    renderPages();
+    let r = state.results[0];
+    if (!state.pages.length) {
+      if (r) { r.srcs = []; releaseResult(r); r.row.remove(); state.results = []; }
+      refreshHead();
+      return;
+    }
+    if (!r) {
+      r = { row: makeRow('Building PDF…'), inSize: 0, files: [], srcs: [] };
+      state.results = [r];
+      $('#resultsList').prepend(r.row);
+    }
+    r.files = state.pages.map((pg) => pg.file);
+    r.srcs = state.pages.map((pg) => pg.src);
+    r.inSize = r.files.reduce((a, f) => a + f.size, 0);
+    scheduleReprocess(150);
+    refreshHead();
+  }
+  async function addPages(files) {
+    for (const f of files) {
+      try { state.pages.push({ file: f, src: await loadImage(f) }); }
+      catch (err) { /* skip a file the browser cannot read */ }
+    }
+    changedPages();
   }
 
   async function handleFiles(fileList) {
@@ -716,6 +931,8 @@
     refreshHead();
 
     if (cfg.mode === 'base64') { for (const f of files) await doBase64(f); return; }
+
+    if (cfg.reorder) { await addPages(files); return; }
 
     if (cfg.mode === 'pdf' && state.combine) {
       const r = { row: makeRow(files.length + ' image' + (files.length > 1 ? 's' : '') + ' → PDF'), inSize: files.reduce((a, f) => a + f.size, 0), files: files };

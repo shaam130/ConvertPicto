@@ -1,0 +1,6 @@
+WebP encoder used by ConvertPicto for lossless WebP (and as a fallback where the browser cannot export WebP).
+
+Files: webp_enc.js, webp_enc.wasm, webp_enc_simd.js, webp_enc_simd.wasm
+Source: @jsquash/webp 1.5.0 (https://github.com/jamsinclair/jSquash), Apache-2.0, built from Google's Squoosh codecs.
+It wraps libwebp (https://chromium.googlesource.com/webm/libwebp), BSD 3-Clause, Copyright (c) 2010, Google Inc.
+The WebAssembly files are unmodified copies from the npm package. All encoding runs in the visitor's browser.

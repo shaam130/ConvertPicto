@@ -8,10 +8,11 @@ Edit the SITE / ADS / ANALYTICS blocks below, then rebuild. Every page in
 dist/ is a fully self-contained HTML file (CSS + JS inlined) so nothing can
 fail to load, wherever you open or host it. Deploy the dist/ folder.
 """
-import json, html, shutil, datetime, sys
+import json, html, shutil, datetime, sys, re
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 import blog as blogmod
+import covers as covermod
 
 ROOT = Path(__file__).parent
 SRC, DIST = ROOT / "src", ROOT / "dist"
@@ -40,6 +41,15 @@ SITE = {
     # Set both to "" to remove the credit line.
     "designer": {"name": "Ihtisham Khalil", "url": "https://ihtishamkhalil.com/"},
 
+    # Author page (/author/<slug>) and the byline/author box on every article.
+    "author": {
+        "name": "Ihtisham Khalil", "slug": "ihtisham-khalil", "role": "Web developer and creator of ConvertPicto",
+        "website": "https://ihtishamkhalil.com/",
+        "github": "https://github.com/shaam130",
+        "linkedin": "https://www.linkedin.com/in/ihtisham-khalil-387481212/",
+        "short_bio": "Independent web developer who designs, builds and maintains ConvertPicto, and tests every claim in these guides on the real tools.",
+    },
+
     # Contact page + footer. Leave any value "" to hide it.
     "contact": {
         "phone": "",                 # e.g. "+92 300 1234567"
@@ -47,8 +57,11 @@ SITE = {
         "location": "",              # e.g. "Karachi, Pakistan"
         "hours": "",                 # e.g. "Replies within 1–2 business days"
     },
+    "repo": "https://github.com/shaam130/ConvertPicto",   # "" to hide the source links
     "social": {                      # full URLs; leave "" to hide
-        "x": "", "facebook": "", "instagram": "", "linkedin": "", "github": "", "youtube": "",
+        "x": "", "facebook": "", "instagram": "",
+        "linkedin": "https://www.linkedin.com/in/ihtisham-khalil-387481212/",
+        "github": "https://github.com/shaam130/ConvertPicto", "youtube": "",
     },
 }
 
@@ -59,6 +72,10 @@ ADS = {
     # While enabled=False: show dashed placeholder boxes where ads will go?  False = nothing
     # rendered at all (recommended while you wait for AdSense approval).
     "placeholders": False,
+    # APPLICATION PHASE: set client to your real "ca-pub-..." ID and verify=True. That puts the
+    # AdSense site-verification script in every page <head> and generates /ads.txt, but still
+    # renders NO ad units (enabled stays False). Flip enabled=True only after approval.
+    "verify": False,
     "client": "ca-pub-XXXXXXXXXXXXXXXX",
     "slots": {"top": "1111111111", "mid": "2222222222", "side": "3333333333", "bottom": "4444444444"},
 }
@@ -124,7 +141,7 @@ def add(slug, **kw):
 
 COMMON_FAQ = [
     ("Is this tool free?", "Yes — every tool on {site} is completely free, with no account, no watermark and no file limits. The site is supported by ads."),
-    ("Are my images uploaded to a server?", "No. {site} runs entirely inside your browser using the Canvas API. Your files are read locally, processed on your device and never sent anywhere — we don't even have a server that could receive them."),
+    ("Are my images uploaded to a server?", "No. {site} runs entirely inside your browser, using the browser's built-in Canvas API and, for lossless WebP, a small open-source WebAssembly encoder (libwebp) that is bundled with the site and also runs on your device. Your files are read locally, processed on your device and never sent anywhere — we don't even have a server that could receive them."),
     ("Does it work on my phone?", "Yes. The site is fully responsive and works in any modern mobile browser (Chrome, Safari, Firefox, Edge). Processing large images is naturally slower on a phone than on a laptop."),
 ]
 
@@ -153,6 +170,10 @@ def conv_tool(src, dst):
     if src == "gif": faq.append(("Does it work with animated GIFs?", f"Only the first frame is converted — {D['label']} is a still-image format. If you need the animation kept, a video format (MP4/WebM) is the usual choice."))
     if src == "svg": faq.append(("What size will the output be?", "If your SVG declares a width and height, that size is used. If it only has a viewBox, it's rendered 1024 px wide at the correct aspect ratio. Use the Resize tool afterwards if you need a specific size."))
     if src == "avif": faq.append(("My AVIF file won't open — why?", "AVIF decoding is handled by your browser. Chrome 85+, Firefox 93+ and Safari 16+ all support it; if you're on something older, updating your browser fixes it."))
+    if src == "avif":
+        faq.append((f"Why is the {D['label']} bigger than my AVIF?", f"AVIF is a newer, more efficient format, so the same picture needs fewer bytes. In our test of five photographs, the JPG made by this tool at the default 85% quality was 1.7 to 2.2 times the size of the AVIF, and the PNG was 16 to 19 times the size, because PNG stores every pixel exactly. The bigger file is the price of a format that opens everywhere."))
+        faq.append(("How do I open an AVIF file on Windows or in Photoshop?", "Support depends on your software and version. Windows may need an AV1 or AVIF extension from the Microsoft Store to preview AVIF files, and some older editors cannot open them at all. Converting the file here avoids the problem, because JPG and PNG open in everything."))
+        faq.append((f"Should I convert AVIF to JPG or PNG?", "Choose JPG for photographs and anything you will upload or email, because the files are far smaller. Choose PNG when the image has transparency, sharp text or flat colours, or when you need an exact copy of what the AVIF showed. JPG cannot keep transparent areas."))
     if dst == "ico": faq.append(("Which icon sizes should I pick?", "16×16, 32×32 and 48×48 (the defaults) cover browser tabs, bookmarks and Windows shortcuts. Add 64–256 px if you also need high-DPI or app-icon use."))
     if dst == "bmp": faq.append(("Why is the BMP so much bigger?", "BMP stores every pixel uncompressed — a 1920×1080 image is always about 6 MB. That's normal; only use BMP when a specific program requires it."))
     return add(slug,
@@ -185,7 +206,7 @@ def compress_tool(fmt):
                ("Why is my file not much smaller?", "If the PNG was already 8-bit (indexed) or very small, there's little left to squeeze. Try lowering the palette size, or convert to WebP for a bigger win.")]
         cfg = {"mode": "compress", "format": "png", "dropTitle": "Drop PNG files here or click to upload", "dropSub": "Any image format works — the output is an optimised PNG"}
     else:
-        lead = f"Reduce {X['label']} file size online. Drag the quality slider, watch the size drop, download. Everything happens in your browser — nothing is uploaded."
+        lead = f"Shrink and reduce {X['label']} file size online. Drag the quality slider, watch the size drop, download. Everything happens in your browser — nothing is uploaded."
         why = [("Pick the right quality", "60–75% is the sweet spot for most photos — the file often shrinks by half or more with no visible difference. Go lower (30–50%) for thumbnails or background images where sharpness matters less."),
                ("Want it even smaller?", "Converting to WebP instead usually cuts another 25–35% at the same visual quality." if fmt == "jpg" else "WebP is already one of the most efficient formats — pairing compression with the Resize tool is the next lever if you need to go smaller.")]
         faq = [("Does compression reduce quality?", f"{X['label']} is a lossy format, so yes — but at 70%+ the difference is invisible for most photos. You can always re-run with a different setting; the original file on your device is never modified."),
@@ -194,7 +215,7 @@ def compress_tool(fmt):
     return add(f"compress-{fmt}", category="compress", fmt=fmt,
         h1=f"Compress {X['label']} Online", howto=f"How to compress a {X['label']}",
         page_title=f"Compress {X['label']} Online — Free, No Upload | {SITE['name']}",
-        meta=f"Compress {X['label']} images online for free. Reduce {X['label']} file size in your browser with no upload and no quality surprises. Batch supported.",
+        meta=f"Compress and shrink {X['label']} images online for free. Reduce {X['label']} file size in your browser with no upload and no quality surprises. Batch supported.",
         card=f"Compress {X['label']}", card_desc=f"Reduce {X['label']} file size",
         lead=lead, config=cfg, why=why,
         steps=[("Upload", f"drop your {X['label']} file(s) onto the box or click to browse."),
@@ -204,6 +225,57 @@ def compress_tool(fmt):
 
 for f_ in ["jpg", "png", "webp"]:
     compress_tool(f_)
+
+# ---- "Compress to N KB" tools: the engine searches for the best quality that fits under the target ----
+TARGETS = {
+    20: dict(use="signatures, small profile pictures and the smallest upload limits on application and exam forms",
+             tip="At 20 KB a photo has to be small. Expect roughly passport-thumbnail dimensions; if the form also asks for a minimum width and height, resize first and then compress.",
+             q="Why does my image get smaller in pixels at 20 KB?",
+             a="Quality alone cannot always get a large photo under 20 KB. The tool lowers quality first, down to 50%, and only then shrinks the pixel dimensions, in the smallest steps that make it fit."),
+    50: dict(use="passport-size photos, ID card scans and the 50 KB limits found on many online forms",
+             tip="A normal phone photo is 1 to 5 MB, so getting to 50 KB means a large reduction. Most of it comes from shrinking the pixels, which is fine for a face photo that will be viewed at a small size.",
+             q="Will my photo still be clear at 50 KB?",
+             a="For a head-and-shoulders photo viewed at passport size, yes. The tool keeps the quality as high as the limit allows and scales the dimensions down only as much as needed. If the form demands a minimum pixel size, check the size shown on the result before you upload."),
+    100: dict(use="job-portal profile photos, KYC documents and university or visa application uploads",
+              tip="100 KB leaves room for a clear face photo at a decent size. A phone photo usually has to shrink in pixels as well as quality, but the result remains sharp at screen size.",
+              q="Is 100 KB enough for a document scan?",
+              a="For a single page of printed text, usually yes at around 1000 to 1500 pixels wide. For small print or a dense table, try 200 KB instead so the characters stay crisp."),
+    200: dict(use="document photos, product pictures, email attachments and 200 KB form limits",
+              tip="200 KB is enough for good-looking photos at about 1000 to 1400 pixels wide, so this is the setting where quality stays high and only large originals need scaling.",
+              q="When is 200 KB the right target?",
+              a="When you need a picture that still looks good on a laptop screen, such as a product photo, a scanned certificate or a profile banner, and the site allows a small but not tiny file."),
+    500: dict(use="marketplace listings, blog images and uploads with a half-megabyte limit",
+              tip="Many images from a phone will drop to 500 KB with little or no visible change, since the search mostly reduces quality rather than size.",
+              q="Why not just use the quality slider?",
+              a="Because you would have to guess. With a size limit you want the best quality that fits, and this tool finds it by testing. A 500 KB limit is usually reached by quality alone, without shrinking the image."),
+}
+def target_tool(kb):
+    d = TARGETS[kb]
+    slug = f"compress-image-to-{kb}kb"
+    return add(slug, category="compress", fmt="jpg", target_kb=kb,
+        h1=f"Compress Image to {kb} KB", howto=f"How to compress an image to {kb} KB",
+        why_title=f"How the {kb} KB compressor works",
+        page_title=f"Compress Image to {kb}KB Online — Free, No Upload | {SITE['name']}",
+        meta=f"Compress any image to {kb} KB or less, online and free. Finds the best JPG quality that fits under {kb} KB. No upload: your photo never leaves your device.",
+        card=f"Compress to {kb} KB", card_desc=f"Get an image under {kb} KB",
+        lead=f"Drop a photo and get a JPG of {kb} KB or less. The tool tests different qualities and keeps the highest one that fits, so you do not have to guess with a slider. Nothing is uploaded.",
+        config={"mode": "compress", "format": "jpg", "targetKb": kb, "dropTitle": f"Drop an image to get it under {kb} KB", "dropSub": "PNG, JPG, WebP and other formats work; the output is a JPG"},
+        why=[("Best quality that fits", f"Instead of one fixed quality, the tool tries several and keeps the highest one that stays under {kb} KB. A simple photo may stay at 90% quality; a detailed one may need less."),
+             ("Shrinks pixels only if it must", "Quality is lowered first, down to 50%. If the image is still too large it is scaled down in small steps until it fits, so you do not lose more resolution than necessary."),
+             (f"Typical use at {kb} KB", f"This size is commonly needed for {d['use']}."),
+             ("Private by design", "The search runs in your browser. IDs, signatures and documents are never uploaded to any server.")],
+        steps=[("Set the target", f"it starts at {kb} KB; change the number or pick 20, 50, 100, 200 or 500 KB."),
+               ("Upload", "drop your image(s) onto the box or click to browse."),
+               ("Download", "the result shows its dimensions, the quality used and the final size.")],
+        faq=[(f"Will the file really be under {kb} KB?", f"Yes. The limit is {kb} x 1024 bytes, the way most upload forms count a kilobyte. If an image cannot be made that small without becoming unusable, the tool says so instead of pretending, and gives you the smallest it can do."),
+             (d["q"], d["a"]),
+             ("What if my image is already under the limit?", "A JPG that is already under your target is returned unchanged, so it is not degraded by being re-compressed."),
+             ("What format is the output?", "Always JPG, because it gives the smallest files for photos and is accepted by almost every upload form. Transparent areas of a PNG are filled with white."),
+             ("Why is there a tip about dimensions?", d["tip"])],
+        keywords=[f"compress image to {kb}kb", f"reduce image size to {kb}kb", f"{kb}kb photo", f"jpg under {kb}kb"])
+
+for kb_ in TARGETS:
+    target_tool(kb_)
 
 add("resize-image", category="edit",
     h1="Resize Image Online", howto="How to resize an image", page_title=f"Resize Image Online — Free, Fast, No Upload | {SITE['name']}",
@@ -263,6 +335,26 @@ add("grayscale-image", category="edit",
          ("Can I get a sepia or tinted version?", "Not from this tool — it's grayscale only. Any image editor can tint the result afterwards.")],
     keywords=["black and white image", "grayscale image online", "convert photo to black and white"])
 
+add("reduce-image-noise", category="edit",
+    h1="Reduce Image Noise Online (Remove Grain from Photos)", howto="How to remove grain from a photo",
+    page_title=f"Reduce Image Noise Online: Remove Grain From Photos Free | {SITE['name']}",
+    meta="Remove grain and noise from photos online for free. Edge-preserving noise reduction with Light, Medium and Strong settings. No upload, runs in your browser.",
+    card="Reduce Noise", card_desc="Remove grain from dark or grainy photos",
+    lead="Smooth out the speckle in low-light and high-ISO photos while keeping edges sharp. Pick a strength, drop your photo, and save the cleaned copy as JPG, PNG or WebP. Nothing is uploaded.",
+    config={"mode": "denoise", "to": "jpg", "quality": 90, "dropTitle": "Drop grainy photos here or click to upload", "dropSub": "Pick the strength first, then drop your files"},
+    why=[("Edge-preserving, not a blur", "Each pixel is averaged with its neighbours, but a neighbour counts for less the more its colour differs. Flat areas such as sky and skin, where grain shows most, get smoothed, while the edge of a face, a text line or a roof stays put."),
+         ("Three strengths", "Light is for mild grain from a daylight phone photo. Medium is the right starting point for most low-light shots. Strong is for heavy grain, and it will soften fine texture such as hair and fabric, so check the result before you keep it."),
+         ("Smaller files as a side effect", "Grain is random detail, and random detail is expensive to store. A cleaned photo usually saves as a noticeably smaller JPG at the same quality setting. The measured numbers are further down this page."),
+         ("Nothing is uploaded", "The filter runs on your own device. Photos of people, documents and private spaces never leave your browser.")],
+    steps=[("Choose a strength", "start with Medium; try Light if the photo looks too soft afterwards."), ("Upload", "drop your photo(s). Large photos take a few seconds because every pixel is processed."), ("Compare and download", "open the result next to the original and save it as JPG, PNG or WebP.")],
+    faq=[("Will this make a very dark photo bright?", "No. This tool removes grain, it does not change brightness. If the photo is too dark, brighten it first in your phone's editor, because brightening is what makes the noise visible, then clean it here."),
+         ("Is it as good as an AI denoiser?", "No. AI denoisers in tools such as Lightroom or Photoshop learn what real detail looks like and recover more of it. This is a classic filter: it reliably reduces grain and keeps edges, but at Strong it also softens fine texture. It is a free, private, instant option, not a replacement for the best paid tools."),
+         ("Does it work on screenshots or logos?", "It is built for photographs. Screenshots and logos have no grain, and smoothing them only blurs sharp edges."),
+         ("Why does the result look soft?", "Every denoiser trades grain for detail, because the filter cannot always tell fine texture from noise. If it looks too soft, use a lighter strength."),
+         ("Does it keep transparency?", "Yes if you save as PNG or WebP. JPG has no transparency, so transparent areas are filled with the background colour."),
+         ("How long does it take?", "On our test machine, about a fifth of a second for a 0.6-megapixel image and 3 to 5 seconds for a 6-megapixel photo. A full 12-megapixel phone photo takes roughly twice that, and slower phones take longer. The page stays usable while it works.")],
+    keywords=["reduce image noise", "remove grain from photo", "denoise image online", "fix grainy photo"])
+
 for src in PDF_SOURCES:
     S = F[src]
     add(f"{src}-to-pdf", category="pdf", src=src,
@@ -293,6 +385,27 @@ add("image-to-pdf", category="pdf",
          ("Why JPEG inside the PDF?", "JPEG keeps PDF sizes small while staying visually lossless at 90%+. Line art and text screenshots look fine at 100%.")],
     keywords=["image to pdf", "picture to pdf", "photo to pdf converter"])
 
+add("combine-images-to-pdf", category="pdf",
+    h1="Combine Images into One PDF (Merge, Reorder, Free)", howto="How to combine images into one PDF",
+    page_title=f"Combine Images Into One PDF: Merge and Reorder, Free | {SITE['name']}",
+    meta="Combine or merge multiple images (JPG, PNG, WebP and more) into a single PDF online for free. Put the pages in the order you want. No upload, no sign-up.",
+    card="Combine Images to PDF", card_desc="Merge many images into one PDF, in your order",
+    lead="Drop all your photos or scans, arrange them in the order you want, and download one PDF. Add more images any time, move pages up or down, and remove the ones you don't need. Nothing is uploaded.",
+    config={"mode": "pdf", "reorder": True, "dropTitle": "Drop your images here or click to upload", "dropSub": "Add as many as you like, then put them in order. JPG, PNG, WebP, GIF, BMP, AVIF, SVG"},
+    why=[("You choose the page order", "Every image becomes one page, and you can move each one up or down before you download. Sort by file name for a folder of numbered scans, or reverse the order with one click. You see the pages in a list, so there is no guessing which photo comes first."),
+         ("Mix formats in one PDF", "JPG, PNG, WebP, GIF, BMP, AVIF and SVG can all go into the same document. Because the conversion happens in your browser, anything the browser can display can be a page."),
+         ("Control the size and layout", "Choose A4, US Letter or fit-to-image pages, set the orientation and margin, and use the quality slider to make the PDF smaller. For a PDF that has to fit an upload limit, lower the quality before you do anything else; page size does not change the file size."),
+         ("Nothing leaves your device", "Scans of IDs, receipts, contracts and bank statements are exactly what people combine into PDFs. Here the images are processed on your own device and never uploaded.")],
+    steps=[("Add your images", "drop them all at once or add more later. They appear as a list of pages."), ("Arrange them", "use the arrows to move a page up or down, remove any you do not want, or sort by file name."), ("Choose the page and download", "pick A4, Letter or fit-to-image, set the quality, and download one PDF.")],
+    faq=[("How do I combine multiple images into one PDF?", "Drop all the images into the box above. Each one becomes a page, in the order shown in the list. Rearrange them if you need to, then click Download. There is nothing to install and no account needed."),
+         ("Can I change the order of the pages?", "Yes. Each page in the list has up and down arrows. You can also sort the list by file name, which is useful for numbered scans, or reverse it."),
+         ("Can I merge JPG and PNG images into one PDF?", "Yes. Different formats and different sizes can sit in the same PDF. With the A4 or Letter page setting each image is fitted onto a page of that size, and with fit-to-image each page matches its image."),
+         ("Is there a limit on the number of images?", "There is no limit set by the site, because nothing is uploaded. The practical limit is your device's memory, so a phone will handle fewer large photos than a computer. If a very large batch is slow, combine it in two or three smaller PDFs."),
+         ("How do I make the combined PDF smaller?", "Lower the quality slider. In our tests, quality 70 produced a PDF about a third of the size of the originals with little visible change, and the page size setting made no difference to file size. The measured numbers are further down this page."),
+         ("Can I combine PDF files with this tool?", "No. This tool combines images into a PDF. It does not merge PDF files that already exist. If you have images, you are in the right place."),
+         ("Will it reduce the quality of my images?", "Images are stored as JPEG inside the PDF. At the default quality of 90 the difference is hard to see on photos. Line art and screenshots look best at 100.")],
+    keywords=["combine images into pdf", "merge images to pdf", "combine photos into one pdf", "images to one pdf"])
+
 add("favicon-generator", category="other",
     h1="Favicon Generator", howto="How to make a favicon", page_title=f"Favicon Generator — PNG to ICO, Multi-Size | {SITE['name']}",
     meta="Generate a favicon.ico from any image online for free. Bundles 16×16, 32×32, 48×48 (and larger) into one .ico file. Transparency preserved, no upload.",
@@ -303,7 +416,10 @@ add("favicon-generator", category="other",
          ("Add it to your site", "Save the file as <code>favicon.ico</code> in your site's root folder and add <code>&lt;link rel=\"icon\" href=\"/favicon.ico\"&gt;</code> inside <code>&lt;head&gt;</code>.")],
     steps=[("Pick sizes", "16, 32 and 48 are pre-selected and cover nearly every case."), ("Upload", "drop a square logo — non-square images are centred with transparent padding."), ("Download", "rename to favicon.ico if needed and upload to your site.")],
     faq=[("Do I also need PNG favicons?", "Modern browsers accept a PNG via <code>&lt;link rel=\"icon\" type=\"image/png\"&gt;</code>, and iOS wants a 180×180 'apple-touch-icon' PNG. Use the Resize tool for those; the .ico covers legacy browsers and Windows."),
-         ("Why does my icon look blurry?", "Start from a large, square source (256 px or more). Tiny sources upscaled into a favicon will look soft.")],
+         ("Why does my icon look blurry?", "Start from a large, square source (256 px or more). Tiny sources upscaled into a favicon will look soft."),
+         ("Which favicon format should I use?", "Use an .ico file as the baseline, because every browser reads it and it can hold several sizes in one file. Add a 180 x 180 PNG for iPhones, and an SVG if you want one sharp icon at every size. Our favicon guide explains how the three fit together and gives the exact HTML."),
+         ("What size should a favicon be?", "Make the .ico with 16, 32 and 48 px, which covers tabs, bookmarks and Windows shortcuts. Google asks for a square icon whose size is a multiple of 48 px for search results, so the 48 px version matters if you want it shown there."),
+         ("Where do I put the favicon file?", "Save it as favicon.ico in the root folder of your website, the one that serves your homepage, and add a link line to your page head. If you can open yoursite.com/favicon.ico directly in a browser, the file is in the right place.")],
     keywords=["favicon generator", "png to ico", "create favicon"])
 
 add("image-to-base64", category="other",
@@ -316,7 +432,10 @@ add("image-to-base64", category="other",
          ("Exactly your bytes", "The image isn't re-encoded — the data URI contains your original file byte-for-byte, so quality is untouched.")],
     steps=[("Upload", "drop or pick an image."), ("Copy", "choose raw Base64, data URI, HTML tag or CSS."), ("Paste", "into your HTML, CSS, JSON or code.")],
     faq=[("Why is the output bigger than my file?", "Base64 represents every 3 bytes as 4 characters, so it's always about 33% larger. That's inherent to the encoding."),
-         ("Is there a size limit?", "No hard limit, but very large images produce very large strings that are awkward to paste. Keep inlined images small.")],
+         ("Is there a size limit?", "No hard limit, but very large images produce very large strings that are awkward to paste. Keep inlined images small."),
+         ("How do I use a Base64 image in HTML?", "Copy the data URI and paste it into the src of an image tag, for example <code>&lt;img src=\"data:image/png;base64,...\"&gt;</code>. The tool can copy the whole tag for you."),
+         ("How do I use a Base64 image in CSS?", "Use it as a background: <code>background-image: url(\"data:image/png;base64,...\")</code>. The tool has a button that copies the CSS line ready to paste."),
+         ("Does Base64 make my page slower?", "For a very small icon it can make the page faster, because it saves a separate request. For larger images it usually makes it slower, because the text is about a third bigger than the file, it is loaded with the page, and the browser cannot cache it separately. A 13 KB PNG becomes roughly 17 KB of Base64 text, for example.")],
     keywords=["image to base64", "base64 image encoder", "data uri generator"])
 
 CATEGORIES = [
@@ -344,14 +463,17 @@ def related_for(t):
         if t["dst"] == "ico": push("favicon-generator")
     elif t["category"] == "compress":
         f_ = t["fmt"]
+        if t.get("target_kb"):
+            for k in TARGETS: push(f"compress-image-to-{k}kb")
+            push("compress-jpg"); push("resize-image"); push("png-to-jpg")
         push(f"{f_}-to-webp"); push(f"{f_}-to-jpg"); push("resize-image")
         for x in ["jpg", "png", "webp"]: push(f"compress-{x}")
         push(f"{f_}-to-pdf")
     elif t["category"] == "edit":
-        for x in ["resize-image", "rotate-image", "flip-image", "grayscale-image"]: push(x)
+        for x in ["reduce-image-noise", "resize-image", "rotate-image", "flip-image", "grayscale-image"]: push(x)
         push("compress-jpg"); push("png-to-jpg"); push("jpg-to-png"); push("image-to-pdf")
     elif t["category"] == "pdf":
-        for x in ["jpg-to-pdf", "png-to-pdf", "webp-to-pdf", "image-to-pdf"]: push(x)
+        for x in ["combine-images-to-pdf", "jpg-to-pdf", "png-to-pdf", "webp-to-pdf", "image-to-pdf"]: push(x)
         push("compress-jpg"); push("resize-image"); push("png-to-jpg")
     else:
         push("png-to-ico"); push("svg-to-ico"); push("resize-image"); push("png-to-webp"); push("image-to-base64"); push("favicon-generator"); push("compress-png")
@@ -373,9 +495,13 @@ def ad(slot, extra_class=""):
     labels = {"top": "Ad — responsive leaderboard (top)", "mid": "Ad — responsive rectangle (after tool)", "side": "Ad — 300×600 sidebar (desktop only)", "bottom": "Ad — responsive (bottom)"}
     return f'<div class="ad"><div class="ad-placeholder {extra_class}">{labels[slot]}<br><small>Set ADS.enabled = True in build.py once approved</small></div></div>'
 
+def ads_client_real():
+    c = ADS.get("client", "")
+    return bool(re.fullmatch(r"ca-pub-\d{10,20}", c))
+
 def head_scripts():
     s = ""
-    if ADS["enabled"]:
+    if (ADS["enabled"] or ADS.get("verify")) and ads_client_real():
         s += f'<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={ADS["client"]}" crossorigin="anonymous"></script>\n'
     if ANALYTICS["ga4"]:
         s += (f'<script async src="https://www.googletagmanager.com/gtag/js?id={ANALYTICS["ga4"]}"></script>\n'
@@ -453,7 +579,7 @@ ICON = {
 def tool_icon(t):
     m = {"compress": "compress", "pdf": "pdf"}
     if t["category"] in m: return ICON[m[t["category"]]]
-    return ICON.get({"resize-image": "resize", "rotate-image": "rotate", "flip-image": "flip", "grayscale-image": "bw", "favicon-generator": "favicon", "image-to-base64": "code"}.get(t["slug"], "convert"))
+    return ICON.get({"resize-image": "resize", "rotate-image": "rotate", "flip-image": "flip", "grayscale-image": "bw", "reduce-image-noise": "layers", "favicon-generator": "favicon", "image-to-base64": "code"}.get(t["slug"], "convert"))
 
 FONT_LINK = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">'
 
@@ -474,12 +600,12 @@ def footer():
         items = "".join(f'<li><a href="{s}.html">{esc(TOOLS[s]["card"])}</a></li>' for s in slugs if s in TOOLS)
         return f"<div><h3>{title}</h3><ul>{items}</ul></div>"
     convert = ["png-to-jpg", "jpg-to-png", "webp-to-png", "png-to-webp", "jpg-to-webp", "webp-to-jpg", "gif-to-png", "svg-to-png", "avif-to-jpg", "bmp-to-png"]
-    compress = ["compress-jpg", "compress-png", "compress-webp", "resize-image", "rotate-image", "flip-image", "grayscale-image"]
-    pdf = ["jpg-to-pdf", "png-to-pdf", "webp-to-pdf", "image-to-pdf", "favicon-generator", "image-to-base64"]
+    compress = ["compress-jpg", "compress-png", "compress-webp", "compress-image-to-50kb", "compress-image-to-100kb", "resize-image", "reduce-image-noise", "rotate-image", "flip-image", "grayscale-image"]
+    pdf = ["combine-images-to-pdf", "jpg-to-pdf", "png-to-pdf", "webp-to-pdf", "image-to-pdf", "favicon-generator", "image-to-base64"]
     return f'''<footer class="site"><div class="foot">
-  <div class="about"><a class="logo" href="index.html">{logo_html()}</a><p>{esc(SITE["tagline"])}. Nothing you drop here is ever uploaded — every tool runs on your own device.</p>{social_links()}</div>
+  <div class="about"><a class="logo" href="index.html">{logo_html()}</a><p>{esc(SITE["tagline"])}. Nothing you drop here is ever uploaded — every tool runs on your own device.</p><a class="fmail" href="mailto:{SITE["contact_email"]}">{esc(SITE["contact_email"])}</a>{social_links()}</div>
   {col("Convert", convert)}{col("Compress &amp; edit", compress)}{col("PDF &amp; developer", pdf)}
-  <div><h3>Company</h3><ul><li><a href="blog/index.html">Blog</a></li><li><a href="about.html">About</a></li><li><a href="contact.html">Contact</a></li><li><a href="privacy-policy.html">Privacy policy</a></li><li><a href="terms.html">Terms</a></li><li><a href="/sitemap.xml">Sitemap</a></li></ul></div>
+  <div><h3>Company</h3><ul><li><a href="blog/index.html">Blog</a></li><li><a href="about.html">About</a></li><li><a href="contact.html">Contact</a></li><li><a href="privacy-policy.html">Privacy policy</a></li><li><a href="terms.html">Terms</a></li><li><a href="/sitemap.xml">Sitemap</a></li>{f'<li><a href="{SITE["repo"]}" target="_blank" rel="noopener">Source code</a></li>' if SITE.get("repo") else ""}</ul></div>
 </div><div class="foot-bottom"><div class="container"><span>© {SITE["year"]} {esc(SITE["name"])} · All processing happens in your browser.</span>{credit()}</div></div></footer>'''
 
 def credit():
@@ -504,7 +630,8 @@ def clean(html_text):
     html_text = _re.sub(dom + r'/([a-z0-9\-/]+)\.html', lambda m: SITE["domain"] + "/" + _strip_index(m.group(1)), html_text)
     return html_text
 
-def page_shell(*, title, meta, path, body, jsonld=None, current="", noindex=False, engine=False):
+def page_shell(*, title, meta, path, body, jsonld=None, current="", noindex=False, engine=False, og_image=None):
+    og_url = SITE["domain"] + (og_image or "/og-image.png")
     canonical = f'{SITE["domain"]}/{path}' if path != "index.html" else SITE["domain"] + "/"
     ld = "".join(f'<script type="application/ld+json">{json.dumps(x, ensure_ascii=False)}</script>' for x in (jsonld or []))
     return f'''<!DOCTYPE html>
@@ -516,8 +643,8 @@ def page_shell(*, title, meta, path, body, jsonld=None, current="", noindex=Fals
 <meta name="description" content="{esc(meta)}">
 <link rel="canonical" href="{canonical}">
 <meta property="og:type" content="website"><meta property="og:site_name" content="{esc(SITE["name"])}"><meta property="og:title" content="{esc(title)}"><meta property="og:description" content="{esc(meta)}"><meta property="og:url" content="{canonical}">
-<meta property="og:image" content="{SITE["domain"]}/og-image.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
-<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="{esc(title)}"><meta name="twitter:description" content="{esc(meta)}"><meta name="twitter:image" content="{SITE["domain"]}/og-image.png">
+<meta property="og:image" content="{og_url}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="{esc(title)}"><meta name="twitter:description" content="{esc(meta)}"><meta name="twitter:image" content="{og_url}">
 <meta name="robots" content="{"noindex" if noindex else "index,follow,max-image-preview:large"}">
 <meta name="theme-color" content="#6366f1">
 {FONT_LINK}
@@ -544,6 +671,108 @@ def breadcrumb(items):
     lis = "".join(f'<li><a href="{h}">{esc(t)}</a></li>' if h else f"<li>{esc(t)}</li>" for t, h in items)
     return f'<ol class="crumbs">{lis}</ol>'
 
+_ART_CACHE = []
+def site_articles():
+    if not _ART_CACHE: _ART_CACHE.append(blogmod.load_articles(ROOT))
+    return _ART_CACHE[0]
+
+# Fallback guide per tool category, so every tool page links to at least one relevant guide.
+CATEGORY_GUIDE = {"convert": "best-image-format-for-web", "compress": "reduce-image-file-size",
+                  "edit": "reduce-image-file-size", "pdf": "convert-images-to-pdf", "other": "favicon-size-guide"}
+
+def guides_for(t, limit=3):
+    arts = {a["slug"]: a for a in site_articles()}
+    out = [a for a in site_articles() if t["slug"] in a.get("tools", [])]
+    fb = arts.get(CATEGORY_GUIDE.get(t["category"]))
+    if fb and fb not in out: out.append(fb)
+    return out[:limit]
+
+def cover_url(a): return f'/blog/img/{a["slug"]}.jpg'
+
+def post_card(a, lg=False, show_date=False):
+    meta = (f'{_fmt_date(a["date"])} · ' if show_date else "") + f'{a["minutes"]} min read'
+    return (f'<a class="post-card{" lg" if lg else ""}" href="blog/{a["slug"]}.html">'
+            f'<img class="pc-img" src="{cover_url(a)}" width="1200" height="630" alt="" loading="lazy" decoding="async">'
+            f'<div class="pc-body"><div class="t">{esc(a["h1"])}</div><div class="d">{esc(a["excerpt"])}</div><div class="m">{meta}</div></div></a>')
+
+
+# Measured results shown on the busiest tool pages (numbers from our own benchmark run through the real pages in headless Chromium).
+def _mr(intro, rows, link_slug, link_text, note):
+    body = "".join(f"<tr><td>{a}</td><td>{b}</td></tr>" for a, b in rows)
+    return (f'<section class="section"><h2>What we measured</h2><p>{intro}</p>'
+            f'<div class="table-wrap"><table><thead><tr><th>Setting</th><th>Result</th></tr></thead><tbody>{body}</tbody></table></div>'
+            f'<p>{note} Full method and numbers: <a href="blog/{link_slug}.html">{link_text}</a>.</p></section>')
+
+TOOL_EXTRA = {
+    "png-to-jpg": _mr("We converted five photographs from PNG to JPG with this tool at different quality settings and compared the file sizes with the original PNGs.",
+        [("Quality 100", "67% of the PNG size"), ("Quality 95", "23% of the PNG size"), ("Quality 90", "16% of the PNG size"),
+         ("Quality 85 (default)", "12.5% of the PNG size"), ("Quality 40", "5% of the PNG size")],
+        "jpg-vs-webp-quality-settings", "JPG vs WebP quality settings, measured",
+        "Quality 85 to 90 is the sweet spot for photos; above 95 you pay a lot of bytes for differences you cannot see."),
+    "compress-png": _mr("This tool reduces a PNG to a palette of up to 256 colours. We ran four kinds of image through it at the default settings.",
+        [("Photos (average of 5)", "599 KB to 187 KB, but visibly banded (quality score 0.87)"), ("Website screenshot", "292 KB to 154 KB (score 0.97)"),
+         ("Text-heavy page", "234 KB to 117 KB (score 0.999, effectively identical)"), ("Bar chart", "21 KB to 15 KB (score 0.999)")],
+        "png-vs-jpg-vs-webp-tested", "PNG vs JPG vs WebP, what we measured",
+        "Palette compression suits screenshots, text and charts. For photographs, convert to JPG or WebP instead."),
+    "jpg-to-pdf": _mr("We combined five photographs (715 KB of JPEG files in total) into one PDF at three quality settings.",
+        [("Quality 90 (default)", "512 KB, 72% of the sources"), ("Quality 70", "231 KB, 32% of the sources"), ("Quality 50", "160 KB, 22% of the sources"),
+         ("A4 page vs fit to image", "12 bytes apart; page size does not change file size")],
+        "image-to-pdf-file-size", "how big will your image PDF be",
+        "Lower the quality, not the page size, when a PDF has to fit an upload limit."),
+    "webp-to-png": _mr("We converted a WebP photo to PNG with this tool and compared it with the original pixel by pixel.",
+        [("Image size and format", "Same dimensions, valid PNG file"), ("Visible pixels", "Differ by at most 2 levels out of 255"),
+         ("Transparency", "Alpha channel identical to the source"), ("File size", "PNG is much larger than WebP (lossless storage)")],
+        "image-converter-accuracy-test", "image converter accuracy test",
+        "A PNG made from a WebP cannot recover detail the WebP already discarded, it only stores it losslessly."),
+    "resize-image": _mr("We resized five JPEG photos (quality 95) to smaller widths and compared the file size with the original.",
+        [("75% of the width", "30% of the original size"), ("50% of the width", "16% of the original size"), ("25% of the width", "6% of the original size"),
+         ("50% width, then compress to 70%", "12% of the original size")],
+        "resize-vs-compress-image-file-size", "resize vs compress, measured",
+        "Halving the width leaves a quarter of the pixels, which is why resizing saves more than turning the quality slider down."),
+    "compress-jpg": _mr("We ran five JPEG photos (saved at quality 95) through this compressor.",
+        [("Quality 85", "53% of the original size"), ("Quality 70", "35% of the original size"), ("Quality 60", "28% of the original size")],
+        "resize-vs-compress-image-file-size", "resize vs compress, measured",
+        "If the image is much larger than where it will be displayed, resizing first saves more than compression alone."),
+    "reduce-image-noise": _mr("We added synthetic grain to five photographs (random noise of two strengths, so we know exactly what the clean picture looked like), ran them through this page, saved the result as JPG at quality 90 and scored it against the clean original. Higher PSNR and SSIM mean closer to the clean photo. Real camera noise is different from synthetic noise, so treat this as a controlled test, not a promise.",
+        [("Mild grain: before cleaning", "PSNR 31.8, SSIM 0.76"), ("Mild grain: Light / Medium / Strong", "PSNR 34.3 / 34.3 / 32.7, SSIM 0.88 / 0.90 / 0.86"),
+         ("Heavy grain: before cleaning", "PSNR 26.0, SSIM 0.52"), ("Heavy grain: Light / Medium / Strong", "PSNR 27.5 / 30.0 / 31.2, SSIM 0.59 / 0.73 / 0.82"),
+         ("File size at quality 90, mild grain", "24% / 39% / 48% smaller (Light / Medium / Strong)"), ("File size at quality 90, heavy grain", "9% / 26% / 43% smaller")],
+        "how-to-fix-grainy-photos", "how to fix grainy photos",
+        "On mild grain Light and Medium scored the same on PSNR and Medium was higher on SSIM; on heavy grain Strong won on every photo. Strong on mild grain removed real detail and scored lower."),
+    "combine-images-to-pdf": _mr("We combined five photographs (715 KB of JPEG files in total) into one PDF with this engine at three quality settings.",
+        [("Quality 90 (default)", "512 KB, 72% of the sources"), ("Quality 70", "231 KB, 32% of the sources"), ("Quality 50", "160 KB, 22% of the sources"),
+         ("A4 page vs fit to image", "12 bytes apart; page size does not change file size")],
+        "image-to-pdf-file-size", "how big will your image PDF be",
+        "Lower the quality, not the page size, when a combined PDF has to fit an upload limit."),
+    "avif-to-jpg": _mr("We made five AVIF files from photographs (up to 1600 pixels wide, AVIF quality 60) and converted each one to JPG with this page at the default 85% quality.",
+        [("Size of the JPG compared with the AVIF", "1.7 to 2.2 times bigger"), ("Average across the five photos", "1.9 times bigger"),
+         ("Output file type", "A valid JPEG every time"), ("Typical example", "22 KB AVIF became a 49 KB JPG")],
+        "best-image-format-for-web", "the best image format for the web",
+        "AVIF is smaller, but JPG opens in every app, form and email client."),
+    "avif-to-png": _mr("We made five AVIF files from photographs (up to 1600 pixels wide, AVIF quality 60) and converted each one to PNG with this page.",
+        [("Size of the PNG compared with the AVIF", "16 to 19 times bigger"), ("Pixels compared with the AVIF decoded by an image library", "Identical in all five files"),
+         ("Output file type", "A valid PNG every time"), ("Typical example", "22 KB AVIF became a 428 KB PNG")],
+        "best-image-format-for-web", "the best image format for the web",
+        "PNG is lossless, so it keeps every pixel exactly, but photographs make very large PNG files. Use JPG when size matters."),
+    "favicon-generator": _mr("We made icon files from an 800 x 500 PNG logo with this page and read the result with an image library.",
+        [("Default sizes: 16, 32 and 48 px", "3.7 KB in one .ico file"), ("All six sizes: 16, 32, 48, 64, 128 and 256 px", "21.1 KB in one .ico file"),
+         ("Sizes found inside the file", "Exactly the ones that were ticked")],
+        "favicon-size-guide", "favicon sizes and formats explained",
+        "The three default sizes cover browser tabs, bookmarks and Windows shortcuts. Adding 128 and 256 px makes the file about six times larger, so tick them only if you need them."),
+    "png-to-ico": _mr("We converted a 640 x 420 PNG into an icon file with this tool and opened the result with an image library.",
+        [("Sizes inside the ICO", "16 x 16, 32 x 32 and 48 x 48"), ("File size", "5.8 KB")],
+        "favicon-size-guide", "favicon size guide",
+        "One ICO file with several sizes covers browser tabs, bookmarks and desktop shortcuts."),
+}
+
+_BIG = {20: ("512 x 342", "51%"), 50: ("931 x 621", "52%"), 100: ("1454 x 969", "51%"), 200: ("2251 x 1501", "56%"), 500: ("4000 x 2667 (unchanged)", "58%")}
+for _k, (_dims, _q) in _BIG.items():
+    TOOL_EXTRA[f"compress-image-to-{_k}kb"] = _mr(
+        f"We took a 4000 x 2667 camera-style photo ({'2.15 MB'}, a real photograph enlarged with sensor-style noise) and ran it through this tool.",
+        [("Target", f"{_k} KB or less"), ("Result", "under the limit, checked in the real page"), ("Dimensions", _dims), ("JPG quality used", _q)],
+        "compress-image-to-specific-size-kb", "how to compress an image to a specific size",
+        "The tool lowers quality first and shrinks pixels only when it has to.")
+
 def tool_page(t):
     cat_name = dict((c[0], c[1]) for c in CATEGORIES)[t["category"]]
     faq = [(q, a.format(site=SITE["name"])) for q, a in t["faq"] + COMMON_FAQ]
@@ -554,6 +783,8 @@ def tool_page(t):
     steps = "".join(f'<li><strong>{esc(s)}</strong> — {esc(r)}</li>' for s, r in t["steps"])
     faq_html = "".join(f'<details><summary>{esc(q)}</summary><p>{a}</p></details>' for q, a in faq)
     related = "".join(f'<a href="{s}.html">{esc(TOOLS[s]["card"])}</a>' for s in related_for(t))
+    g = guides_for(t)
+    guides_html = (f'<section class="section"><h2>Guides worth reading</h2><div class="post-grid">{"".join(post_card(a) for a in g)}</div></section>' if g else "")
     body = f'''<main><div class="layout{'' if ad("side") else ' single'}"><div>
   {breadcrumb([("Home", "index.html"), (cat_name, f"index.html#{t['category']}"), (t["card"], None)])}
   <div class="eyebrow">{esc(cat_name)}</div>
@@ -565,7 +796,9 @@ def tool_page(t):
   {ad("mid", "rect")}
   <section class="section"><h2>{esc(why_title)}</h2><div class="cards">{why}</div></section>
   <section class="section"><h2>{esc(t.get("howto", "How it works"))}</h2><ol class="steps">{steps}</ol></section>
+  {TOOL_EXTRA.get(t["slug"], "")}
   <section class="section faq"><h2>Frequently asked questions</h2>{faq_html}</section>
+  {guides_html}
   <section class="section"><h2>Related tools</h2><div class="chips">{related}</div></section>
   {ad("bottom")}
 </div>
@@ -622,14 +855,29 @@ def home_page():
         grid = "".join(card(t, compact=True) for t in items)
         blocks += f'<section class="block cat" id="{cid}"><div class="block-head"><div><div class="eyebrow">{esc(cname)}</div><h2>{esc(cname if cname.lower().endswith("tools") else cname + " tools")}</h2><p class="sub">{esc(cdesc)}</p></div></div><div class="compact-grid">{grid}</div></section>'
 
-    faq = [("Are my images really not uploaded?", "Correct. Every tool here is JavaScript running in your browser — there is no server-side processing at all. You can even load a page, disconnect from the internet, and it keeps working."),
-           ("Which formats are supported?", "Input: PNG, JPG, WebP, GIF, BMP, AVIF, SVG and ICO — anything your browser can display. Output: PNG, JPG, WebP, BMP, ICO and PDF. HEIC isn't supported because browsers can't decode it."),
-           ("Is there a file size or count limit?", "No. Batch as many files as you like; the only limit is your device's memory."),
-           ("How is this free?", "The site is supported by unobtrusive ads. There's no premium tier, no watermark and no sign-up.")]
-    faq_html = "".join(f'<details><summary>{esc(q)}</summary><p>{esc(a)}</p></details>' for q, a in faq)
+    faq = [
+        ("Are my images really not uploaded?", "Correct. Every tool here is JavaScript running in your browser, so there is no server-side processing at all. You can load a page, disconnect from the internet, and it keeps working. The site does use standard analytics and advertising cookies, which are described in the <a href=\"privacy-policy.html\">privacy policy</a>, but your images are never part of that."),
+        ("How do I convert an image from one format to another?", "Find your source format on the left of the conversion grid and the format you need across the top, then click the arrow where they meet. Drop your file, adjust the quality if you want to, and download the result. There are 28 conversions between PNG, JPG, WebP, GIF, BMP, AVIF, SVG and ICO."),
+        ("Which formats are supported?", "Input: PNG, JPG, WebP, GIF, BMP, AVIF, SVG and ICO, which means anything your browser can display. Output: PNG, JPG, WebP, BMP, ICO and PDF. HEIC is not supported because browsers cannot decode it."),
+        ("Will I lose quality when I convert?", "It depends on the target. PNG, BMP and ICO are lossless, so nothing more is lost. JPG and WebP are lossy, but at 85% quality the difference is invisible for most photos. In our <a href=\"blog/image-converter-accuracy-test.html\">accuracy test</a> all 28 conversions produced the correct file type and 7 of them were pixel-for-pixel identical to the source."),
+        ("How do I make an image smaller?", "Use the compressors for JPG, PNG and WebP, or the resizer if the picture is larger than it needs to be. Shrinking the dimensions usually saves more than lowering quality; we measured it in <a href=\"blog/resize-vs-compress-image-file-size.html\">resize vs compress</a>."),
+        ("How do I get an image under 50 KB or 100 KB for a form?", "Use one of the size-limit tools: <a href=\"compress-image-to-20kb.html\">20 KB</a>, <a href=\"compress-image-to-50kb.html\">50 KB</a>, <a href=\"compress-image-to-100kb.html\">100 KB</a>, <a href=\"compress-image-to-200kb.html\">200 KB</a> or <a href=\"compress-image-to-500kb.html\">500 KB</a>. They test different qualities and keep the highest one that fits under your limit. The <a href=\"blog/compress-image-to-specific-size-kb.html\">size-limit guide</a> has the details."),
+        ("Which format should I use: PNG, JPG or WebP?", "JPG or WebP for photos, WebP for screenshots, and PNG for text, charts and anything with transparency. We tested all three on photos, screenshots, text pages and charts in <a href=\"blog/png-vs-jpg-vs-webp-tested.html\">PNG vs JPG vs WebP</a>, and the <a href=\"blog/best-image-format-for-web.html\">format guide</a> covers AVIF as well."),
+        ("How do I turn images into a PDF?", "Open <a href=\"image-to-pdf.html\">Image to PDF</a>, drop several images and tick Combine to get one multi-page PDF, or use the PNG, JPG or WebP to PDF page for that format. You can pick A4, US Letter or fit-to-image pages. See <a href=\"blog/convert-images-to-pdf.html\">how to combine images into one PDF</a> and <a href=\"blog/image-to-pdf-file-size.html\">what controls the PDF size</a>."),
+        ("Can I resize, rotate or flip an image?", "Yes. The edit tools resize by pixels or percentage, rotate by 90, 180 or 270 degrees, flip horizontally or vertically, and convert to grayscale. All of them work on a batch of files at once."),
+        ("How do I make a favicon?", "Drop a square logo into the <a href=\"favicon-generator.html\">favicon generator</a> and pick the sizes you need, usually 16, 32 and 48 pixels. The <a href=\"blog/favicon-size-guide.html\">favicon guide</a> lists every size and the HTML to add to your site."),
+        ("Is there a file size or count limit?", "No. Batch as many files as you like and download them one by one or as a ZIP. The only limit is your device's memory, so very large images are slower on a phone than on a laptop."),
+        ("Does it work on my phone?", "Yes. The site is fully responsive and works in any modern mobile browser, including Chrome, Safari, Firefox and Edge."),
+        ("How is this free?", "The site is supported by unobtrusive ads. There is no premium tier, no watermark and no sign-up."),
+    ]
+    faq_html = "".join(f'<details><summary>{esc(q)}</summary><p>{a}</p></details>' for q, a in faq)
     fmts = "".join(f"<span>{F[k]['label']}</span>" for k in ["png", "jpg", "webp", "gif", "bmp", "avif", "svg", "ico"]) + "<span>PDF</span>"
     hero_cfg = esc(json.dumps({"mode": "convert", "to": "webp", "dropTitle": "Drop an image to try it", "dropSub": "Pick a format below, get the file back instantly"}))
     ck = ICON["check"]
+    arts = site_articles()
+    blog_block = (f'<section class="block"><div class="block-head"><div><div class="eyebrow">From the blog</div><h2>Guides to image formats and file size</h2>'
+                  f'<p class="sub">Plain-English explanations, written by the person who built the tools.</p></div><a class="more" href="blog/index.html">All guides →</a></div>'
+                  f'<div class="post-grid">{"".join(post_card(a) for a in arts[:6])}</div></section>') if arts else ""
 
     body = f'''<main style="padding-top:0">
   <section class="hero"><div class="container"><div class="hero-grid">
@@ -638,7 +886,7 @@ def home_page():
       <h1>Every image tool you need.<br><span class="grad">Private by design.</span></h1>
       <p class="sub">Convert, compress, resize and turn images into PDFs — instantly, in your browser. Your files never leave your device, because there is no server to send them to.</p>
       <div class="hero-actions"><a class="btn btn-primary btn-lg" href="#convert">Browse all tools {ICON["arrow"]}</a><a class="btn btn-secondary btn-lg" href="compress-png.html">Compress a PNG</a></div>
-      <div class="hero-proof"><span>{ck} No file limits</span><span>{ck} Batch + ZIP download</span><span>{ck} Works offline</span><span>{ck} Free forever</span></div>
+      <div class="hero-proof"><span>{ck} No file limits</span><span>{ck} Batch + ZIP download</span><span>{ck} Runs in your browser</span><span>{ck} Free forever</span></div>
     </div>
     <div class="hero-tool"><span class="tool-label">Live demo</span><div class="tool-shell"><div id="tool" data-config='{hero_cfg}'></div></div></div>
   </div></div></section>
@@ -669,12 +917,13 @@ def home_page():
 
     <section class="block"><div class="block-head"><div><div class="eyebrow">Why {esc(SITE["name"])}</div><h2>Built the way image tools should be</h2></div></div>
       <div class="why">
-        <div class="why-card"><div class="ico">{ICON["lock"]}</div><h3>Private by design</h3><p>Processing happens on your device with the browser's own Canvas API. No server ever sees your files — turn off Wi-Fi and it still works.</p></div>
+        <div class="why-card"><div class="ico">{ICON["lock"]}</div><h3>Private by design</h3><p>Processing happens on your device with the browser's own Canvas API (plus a small open-source WebAssembly encoder for lossless WebP). No server ever sees your files — turn off Wi-Fi and it still works.</p></div>
         <div class="why-card"><div class="ico">{ICON["bolt"]}</div><h3>Instant</h3><p>No upload queue, no waiting for a download link. Conversion starts the moment you drop a file.</p></div>
         <div class="why-card"><div class="ico">{ICON["layers"]}</div><h3>Real compression</h3><p>True palette-based PNG optimisation, tunable JPG and WebP quality, and honest before/after sizes on every file.</p></div>
         <div class="why-card"><div class="ico">{ICON["gift"]}</div><h3>Free, no catch</h3><p>No account, no watermark, no file limits, no premium tier. Supported by unobtrusive ads.</p></div>
       </div></section>
 
+    {blog_block}
     {ad("bottom")}
     <section class="block faq" style="max-width:820px"><div class="block-head"><div><div class="eyebrow">FAQ</div><h2>Questions, answered</h2></div></div>{faq_html}</section>
 
@@ -684,12 +933,70 @@ def home_page():
     jsonld = [
         {"@context": "https://schema.org", "@type": "WebSite", "name": SITE["name"], "url": SITE["domain"] + "/", "description": SITE["tagline"]},
         {"@context": "https://schema.org", "@type": "Organization", "name": SITE["name"], "url": SITE["domain"] + "/", "logo": SITE["domain"] + "/og-image.png",
-         "email": SITE["contact_email"], "sameAs": [v for v in SITE.get("social", {}).values() if v]},
-        {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}} for q, a in faq]},
+         "email": SITE["contact_email"], "sameAs": [v for v in SITE.get("social", {}).values() if v], "founder": author_person_ld()},
+        {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": strip_tags(a)}} for q, a in faq]},
     ]
     return page_shell(title=f'{SITE["name"]} — Free Online Image Converter & Compressor',
                       meta=f"{len(TOOLS)} free image tools that run in your browser: convert PNG, JPG, WebP, GIF, BMP, AVIF, SVG; compress; resize; image to PDF; favicon. No upload, no sign-up.",
                       path="index.html", body=body, jsonld=jsonld, current="index.html", engine=True)
+
+def author_path(): return f'author/{SITE["author"]["slug"]}.html'
+def author_url(): return f'{SITE["domain"]}/author/{SITE["author"]["slug"]}'
+def author_same_as():
+    A = SITE["author"]
+    return [u for u in (A.get("website"), A.get("linkedin"), A.get("github")) if u]
+def author_person_ld(full=False):
+    A = SITE["author"]
+    p = {"@type": "Person", "@id": author_url() + "#person", "name": A["name"], "url": author_url(), "sameAs": author_same_as()}
+    if full:
+        p.update({"jobTitle": "Web developer", "description": A["short_bio"],
+                  "worksFor": {"@type": "Organization", "name": SITE["name"], "url": SITE["domain"] + "/"},
+                  "knowsAbout": ["Image compression", "Image file formats (PNG, JPG, WebP, AVIF)", "Client-side web development", "JavaScript", "PDF generation in the browser"]})
+    return p
+
+def author_box():
+    A = SITE["author"]
+    initials = "".join(w[0] for w in A["name"].split()[:2]).upper()
+    return (f'<aside class="author-box" aria-label="About the author"><div class="av" aria-hidden="true">{initials}</div>'
+            f'<div><div class="lbl">Written by</div><div class="nm"><a rel="author" href="{author_path()}">{esc(A["name"])}</a></div>'
+            f'<p>{esc(A["short_bio"])}</p><a class="more" href="{author_path()}">More from {esc(A["name"].split()[0])} →</a></div></aside>')
+
+def author_page():
+    A, n = SITE["author"], SITE["name"]
+    arts = site_articles()
+    initials = "".join(w[0] for w in A["name"].split()[:2]).upper()
+    links = [("Website", A.get("website")), ("LinkedIn", A.get("linkedin")), ("GitHub", A.get("github"))]
+    links_html = "".join(f'<a class="btn btn-secondary" href="{esc(u)}" target="_blank" rel="me noopener">{k}</a>' for k, u in links if u)
+    cards = "".join(post_card(a, show_date=True) for a in arts)
+    body = f'''<main><div class="container" style="max-width:900px">
+  {breadcrumb([("Home", "index.html"), ("Blog", "blog/index.html"), (A["name"], None)])}
+  <header class="author-head"><div class="av lg" aria-hidden="true">{initials}</div>
+    <div><div class="eyebrow">Author</div><h1>{esc(A["name"])}</h1><p class="lead" style="margin-top:6px">{esc(A["role"])}</p>
+    <div class="author-links">{links_html}</div></div></header>
+  <div class="prose-body" style="max-width:72ch">
+    <h2>About {esc(A["name"])}</h2>
+    <p>{esc(A["name"])} is an independent web developer. He designs, builds and maintains {n}, a set of free image tools that run entirely in the browser. It started as a small converter built for his own use, after getting tired of image tools that uploaded files to a server, added a watermark, or hid the download behind a sign-up.</p>
+    <p>{n} is open source under the MIT licence, so the code behind every claim on this site can be read and checked on <a href="{esc(SITE["repo"])}" target="_blank" rel="noopener">GitHub</a>. He has also written up how the PNG compressor works on DEV Community and in the article <a href="blog/png-compressor-vanilla-javascript.html">How I wrote a PNG compressor in plain JavaScript</a>.</p>
+    <h2>What he writes about</h2>
+    <p>The articles on this blog cover image formats (PNG, JPG, WebP and AVIF), compressing images and getting them under a size limit, resizing, combining images into PDFs, favicons, and how online image converters handle your files. Where an article gives numbers, they come from tests described in the article itself.</p>
+    <h2>How the numbers in the articles are produced</h2>
+    <p>Benchmarks are run on the real {n} pages in headless Chromium. Output files are then opened with independent tools, such as Pillow for image decoding, scikit-image for quality scores (SSIM and PSNR) and a PDF library for page counts, so the tool is not marking its own homework. Each article says what was tested, on which images, and what the limits of the test are.</p>
+    <h2>Get in touch</h2>
+    <p>Corrections, bug reports and requests are welcome at <a href="mailto:{esc(SITE["contact_email"])}">{esc(SITE["contact_email"])}</a> or through the <a href="contact.html">contact page</a>.</p>
+  </div>
+  <h2 style="margin-top:44px">Articles by {esc(A["name"])}</h2>
+  <div class="post-grid">{cards}</div>
+</div></main>'''
+    jsonld = [
+        {"@context": "https://schema.org", "@type": "ProfilePage", "url": author_url(), "name": f'{A["name"]} — author at {n}',
+         "mainEntity": author_person_ld(full=True)},
+        {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Home", "item": SITE["domain"] + "/"},
+            {"@type": "ListItem", "position": 2, "name": "Blog", "item": f'{SITE["domain"]}/blog/'},
+            {"@type": "ListItem", "position": 3, "name": A["name"], "item": author_url()}]},
+    ]
+    return page_shell(title=f'{A["name"]} — Author | {n}', meta=f'{A["name"]}, {A["role"].lower()}. Articles on image formats, compression and PDF, with tested numbers.',
+                      path=author_path(), body=body, jsonld=jsonld)
 
 def prose_page(path, title, meta, h1, sections, noindex=False):
     sec = "".join(f"<h2>{esc(h)}</h2>{p}" for h, p in sections)
@@ -700,10 +1007,11 @@ def static_pages():
     n, e, d = SITE["name"], SITE["contact_email"], SITE["domain"]
     yield "about.html", prose_page("about.html", f"About | {n}", f"{n} is a set of free image tools that run entirely in your browser.", f"About {n}", [
         ("What this is", f"<p>{n} is a collection of {len(TOOLS)} small, focused image tools — converters, compressors, a resizer, an image-to-PDF maker and a few developer utilities. Every one of them runs entirely inside your web browser.</p>"),
-        ("Why 'in your browser' matters", "<p>Most online image tools upload your file to a server, process it there, and send the result back. That's slower than it needs to be, and it means a copy of your file — which might be a passport scan, a contract, a private photo — passes through someone else's infrastructure.</p><p>Here, your browser does the work using its built-in Canvas API. The file is read from your disk into memory, processed, and offered back as a download. It never touches a network connection. You can verify this yourself: load a tool, switch off your Wi-Fi, and it keeps working.</p>"),
+        ("Why 'in your browser' matters", "<p>Most online image tools upload your file to a server, process it there, and send the result back. That's slower than it needs to be, and it means a copy of your file — which might be a passport scan, a contract, a private photo — passes through someone else's infrastructure.</p><p>Here, your browser does the work using its built-in Canvas API, plus a small open-source WebAssembly encoder (libwebp) for lossless WebP that ships with the site and runs on your device. The file is read from your disk into memory, processed, and offered back as a download. It never touches a network connection. You can verify this yourself: load a tool, switch off your Wi-Fi, and it keeps working.</p>"),
+        ("Open source", (f"<p>{n} is open source under the MIT licence. The complete source — the static-site generator, the client-side image engine and the test suite — is on <a href='{SITE['repo']}' target='_blank' rel='noopener'>GitHub</a>.</p><p>That means the privacy claim above is not something you have to take on trust. You can read exactly what the code does, check that there is no upload endpoint anywhere in it, and run the whole site yourself if you want to.</p>") if SITE.get("repo") else ""),
         ("How it's funded", "<p>The site is supported by ads. There's no premium tier, no sign-up, no watermark, and no limit on how many files you process.</p>"),
         # TODO: replace the paragraph below with something real and specific about you — it helps both AdSense review and search engines.
-        ("Who makes it", f"<p>{n} is designed, built and maintained by <a href='https://ihtishamkhalil.com/' target='_blank' rel='noopener'>Ihtisham Khalil</a>, an independent web developer. It started as a small converter built for personal use, after getting tired of image tools that either uploaded files to a server, added a watermark, or hid the download behind a sign-up. Every tool here is added and tested by hand, and the whole site runs on a single shared engine so a fix in one place fixes every tool.</p><p>Questions, bug reports and format requests are welcome at <a href='mailto:{e}'>{e}</a>.</p>"),
+        ("Who makes it", f"<p>{n} is designed, built and maintained by <a href='author/ihtisham-khalil.html'>Ihtisham Khalil</a> (<a href='https://ihtishamkhalil.com/' target='_blank' rel='noopener'>website</a>), an independent web developer. It started as a small converter built for personal use, after getting tired of image tools that either uploaded files to a server, added a watermark, or hid the download behind a sign-up. Every tool here is added and tested by hand, and the whole site runs on a single shared engine so a fix in one place fixes every tool.</p><p>Questions, bug reports and format requests are welcome at <a href='mailto:{e}'>{e}</a>.</p>"),
     ])
     c = SITE.get("contact", {}); rows = [("Email", f"<a href='mailto:{e}'>{e}</a>")]
     if c.get("phone"): rows.append(("Phone", f"<a href='tel:{c['phone'].replace(' ', '')}'>{esc(c['phone'])}</a>"))
@@ -720,7 +1028,7 @@ def static_pages():
     yield "privacy-policy.html", prose_page("privacy-policy.html", f"Privacy Policy | {n}", f"{n} privacy policy: your images are never uploaded; how ads and cookies work.", "Privacy Policy", [
         ("Your images", f"<p>{n}'s tools process images entirely within your web browser. Files you drop into a tool are never uploaded to our servers and are never seen by us — all processing happens locally on your device using your browser's built-in capabilities.</p>"),
         ("Information we collect", "<p>We do not require an account and do not collect personal information to use the tools. Like most websites, our hosting provider may log basic technical information such as IP address, browser type and pages visited, for security and diagnostic purposes." + (" We use Google Analytics to understand which tools are used most; it sets cookies and collects anonymised usage data — see Google's privacy policy for details." if ANALYTICS["ga4"] else "") + "</p>"),
-        ("Advertising", "<p>This site displays ads served by Google AdSense. Google and its partners may use cookies to serve ads based on your prior visits to this or other websites. You can opt out of personalised advertising at <a href='https://adssettings.google.com' target='_blank' rel='noopener'>Google Ads Settings</a>. Visitors in the EU/UK are shown a consent prompt before any advertising cookies are set.</p>"),
+        ("Advertising", "<p>This site displays ads served by Google AdSense. Google and its partners may use cookies to serve ads based on your prior visits to this or other websites. You can opt out of personalised advertising at <a href='https://adssettings.google.com' target='_blank' rel='noopener'>Google Ads Settings</a>. Where the law requires it (for example in the European Economic Area, the UK and Switzerland), visitors are asked for consent through Google's consent message before advertising cookies are used. You can also learn how Google uses data from sites that use its services at <a href='https://policies.google.com/technologies/partner-sites' target='_blank' rel='noopener'>policies.google.com/technologies/partner-sites</a>. Your images are never part of any of this: they stay on your device and are not shared with advertisers or anyone else.</p>"),
         ("Cookies", "<p>We set one item in your browser's local storage to remember your light/dark theme choice. All other cookies are set by third-party services (advertising, analytics) as described above.</p>"),
         ("Contact", f"<p>Questions about this policy: <a href='mailto:{e}'>{e}</a>.</p><p><em>Last updated: {datetime.date.today():%d %B %Y}</em></p>"),
     ])
@@ -730,6 +1038,7 @@ def static_pages():
         ("Changes", "<p>We may update, add or remove tools at any time. These terms may change; continued use after a change means you accept the updated terms.</p>"),
         ("Contact", f"<p><a href='mailto:{e}'>{e}</a></p>"),
     ])
+    yield author_path(), author_page()
     yield "404.html", prose_page("404.html", f"Page not found | {n}", "That page doesn't exist.", "Page not found", [
         ("Sorry — that page isn't here", "<p>The link may be out of date. Head back to the <a href='index.html'>full list of tools</a>, or try one of the popular ones: <a href='png-to-jpg.html'>PNG to JPG</a>, <a href='compress-jpg.html'>Compress JPG</a>, <a href='jpg-to-pdf.html'>JPG to PDF</a>.</p>"),
     ], noindex=True)
@@ -770,6 +1079,12 @@ RewriteRule ^([^.]+)$ $1.html [L]
 # Compression
 <IfModule mod_deflate.c>
 AddOutputFilterByType DEFLATE text/html text/css text/plain text/xml application/javascript application/json image/svg+xml
+</IfModule>
+
+# WebAssembly + module scripts for the WebP encoder (needs the right MIME types)
+<IfModule mod_mime.c>
+AddType application/wasm .wasm
+AddType text/javascript .js
 </IfModule>
 
 # Browser caching (pages short, so updates show quickly; assets long)
@@ -873,11 +1188,10 @@ def article_page(a, all_articles):
     if a["tools"]:
         cards = "".join(_tool_card_inline(sl) for sl in a["tools"] if sl in TOOLS)
         if cards: tools_html = f'<section class="section"><h2>Tools mentioned in this article</h2><div class="tool-ctas">{cards}</div></section>'
-    others = [x for x in all_articles if x["slug"] != a["slug"]][:3]
+    others = [x for x in all_articles if x["slug"] != a["slug"]]
     more = ""
     if others:
-        cards = "".join(f'<a class="post-card" href="blog/{o["slug"]}.html"><div class="t">{esc(o["h1"])}</div>'
-                        f'<div class="d">{esc(o["excerpt"])}</div><div class="m">{o["minutes"]} min read</div></a>' for o in others)
+        cards = "".join(post_card(o) for o in others)
         more = f'<section class="section"><h2>More from the blog</h2><div class="post-grid">{cards}</div></section>'
     updated = f' · Updated {_fmt_date(a["updated"])}' if a["updated"] else ""
     body = f'''<main><div class="layout{'' if ad("side") else ' single'}"><div>
@@ -885,10 +1199,12 @@ def article_page(a, all_articles):
   <article class="post">
     <div class="eyebrow">Guide</div>
     <h1>{esc(a["h1"])}</h1>
-    <div class="post-meta">{_fmt_date(a["date"])}{updated} · {a["minutes"]} min read · by <a href="{esc((SITE.get("designer") or {}).get("url", "about.html"))}">{esc((SITE.get("designer") or {}).get("name", SITE["name"]))}</a></div>
+    <div class="post-meta">{_fmt_date(a["date"])}{updated} · {a["minutes"]} min read · by <a rel="author" href="{author_path()}">{esc(SITE["author"]["name"])}</a></div>
+    <figure class="post-cover"><img src="{cover_url(a)}" width="1200" height="630" alt="Cover image for: {esc(a["h1"])}" fetchpriority="high" decoding="async"></figure>
     {ad("top")}
     {toc_html}
     <div class="prose-body">{body_html}</div>
+    {author_box()}
   </article>
   {tools_html}
   {ad("mid", "rect")}
@@ -902,22 +1218,19 @@ def article_page(a, all_articles):
     jsonld = [
         {"@context": "https://schema.org", "@type": "Article", "headline": a["h1"], "description": a["description"],
          "datePublished": a["date"], "dateModified": a["updated"] or a["date"],
-         "author": {"@type": "Person", "name": author, "url": (SITE.get("designer") or {}).get("url", SITE["domain"])},
+         "author": author_person_ld(),
          "publisher": {"@type": "Organization", "name": SITE["name"], "logo": {"@type": "ImageObject", "url": SITE["domain"] + "/og-image.png"}},
-         "mainEntityOfPage": {"@type": "WebPage", "@id": url}, "image": SITE["domain"] + "/og-image.png",
+         "mainEntityOfPage": {"@type": "WebPage", "@id": url}, "image": SITE["domain"] + cover_url(a),
          "wordCount": a["words"], "inLanguage": "en"},
         {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [
             {"@type": "ListItem", "position": 1, "name": "Home", "item": SITE["domain"] + "/"},
             {"@type": "ListItem", "position": 2, "name": "Blog", "item": f'{SITE["domain"]}/blog/'},
             {"@type": "ListItem", "position": 3, "name": a["h1"], "item": url}]},
     ]
-    return page_shell(title=a["title"], meta=a["description"], path=f'blog/{a["slug"]}.html', body=body, jsonld=jsonld)
+    return page_shell(title=a["title"], meta=a["description"], path=f'blog/{a["slug"]}.html', body=body, jsonld=jsonld, og_image=cover_url(a))
 
 def blog_index(articles):
-    cards = "".join(
-        f'<a class="post-card lg" href="blog/{a["slug"]}.html"><div class="t">{esc(a["h1"])}</div>'
-        f'<div class="d">{esc(a["excerpt"])}</div><div class="m">{_fmt_date(a["date"])} · {a["minutes"]} min read</div></a>'
-        for a in articles)
+    cards = "".join(post_card(a, lg=True, show_date=True) for a in articles)
     body = f'''<main><div class="container" style="max-width:900px">
   {breadcrumb([("Home", "index.html"), ("Blog", None)])}
   <div class="eyebrow">Blog</div>
@@ -950,13 +1263,23 @@ def build():
             (DIST / "blog" / f'{a["slug"]}.html').write_text(article_page(a, articles), encoding="utf-8")
             pages.append((f'blog/{a["slug"]}.html', "0.7", "monthly"))
     for name, content in static_pages():
+        (DIST / name).parent.mkdir(parents=True, exist_ok=True)
         (DIST / name).write_text(content, encoding="utf-8")
-        if name != "404.html": pages.append((name, "0.3", "yearly"))
+        if name.startswith("author/"): pages.append((name, "0.5", "monthly"))
+        elif name != "404.html": pages.append((name, "0.3", "yearly"))
     today = datetime.date.today().isoformat()
     urls = "".join(f'<url><loc>{SITE["domain"] + "/" if p == "index.html" else SITE["domain"] + "/" + p}</loc><lastmod>{today}</lastmod><changefreq>{c}</changefreq><priority>{pr}</priority></url>' for p, pr, c in pages)
     (DIST / "sitemap.xml").write_text(clean(f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>'), encoding="utf-8")
     (DIST / ".htaccess").write_text(HTACCESS, encoding="utf-8")
+    if (SRC / "vendor").exists(): shutil.copytree(SRC / "vendor", DIST / "vendor")
     make_og_image()
+    try:
+        _logo = logo_raster(44)
+        for a in articles: covermod.make_cover(a["slug"], a["title"], DIST / "blog" / "img", brand=SITE["name"], logo=_logo)
+    except ImportError:
+        print("note: Pillow not installed — blog cover images not generated.")
+    if (ADS["enabled"] or ADS.get("verify")) and ads_client_real():
+        (DIST / "ads.txt").write_text(f"google.com, {ADS['client'].replace('ca-', '', 1)}, DIRECT, f08c47fec0942fa0\n", encoding="utf-8")
     (DIST / "robots.txt").write_text(f"User-agent: *\nAllow: /\nSitemap: {SITE['domain']}/sitemap.xml\n", encoding="utf-8")
     print(f"built {len(pages) + 1} pages into {DIST}/  ({len(TOOLS)} tools, {len(articles)} articles)")
 

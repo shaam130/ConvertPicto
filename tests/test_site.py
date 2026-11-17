@@ -119,6 +119,44 @@ with sync_playwright() as p:
         if max(px) - min(px) > 6: failures.append(f"grayscale: pixel not gray {px}")
         print("ok  grayscale-image", im.size, px)
 
+    # reduce-image-noise: output must be a JPEG of the same size, with less noise than the input
+    import numpy as np
+    clean = Image.open(A/"photo.jpg").convert("RGB")
+    rng_ = np.random.default_rng(3)
+    noisy_arr = np.clip(np.asarray(clean).astype(np.float32) + rng_.normal(0, 12, (clean.height, clean.width, 1)), 0, 255).astype(np.uint8)
+    noisy_path = A/"noisy-test.png"; Image.fromarray(noisy_arr).save(noisy_path)
+    res = run_tool(page, "reduce-image-noise", [noisy_path], "jpg")
+    im = check_image("reduce-image-noise", res[0][1], "JPEG")
+    if im:
+        if im.size != clean.size: failures.append(f"reduce-image-noise: size {im.size} != {clean.size}")
+        def mse(x): return float(((np.asarray(x.convert("RGB")).astype(np.float32) - np.asarray(clean)) ** 2).mean())
+        before, after = mse(Image.fromarray(noisy_arr)), mse(im)
+        if not after < before * 0.8: failures.append(f"reduce-image-noise: error did not drop enough (MSE {before:.1f} -> {after:.1f})")
+        print(f"ok  reduce-image-noise MSE vs clean {before:.1f} -> {after:.1f}")
+    noisy_path.unlink()
+
+    # combine-images-to-pdf: pages can be added across drops, reordered, and the PDF follows the list order
+    import tempfile
+    td = pathlib.Path(tempfile.mkdtemp())
+    for n, (w_, h_) in {"a-1.png": (300, 200), "b-2.png": (200, 300), "c-3.png": (400, 400)}.items(): Image.new("RGB", (w_, h_), (w_ % 255, h_ % 255, 100)).save(td/n)
+    page.goto((DIST / "combine-images-to-pdf.html").as_uri()); page.wait_for_selector("#dropZone")
+    page.select_option("select.select >> nth=0", "fit")
+    page.set_input_files("#fileInput", [str(td/"a-1.png"), str(td/"b-2.png")])
+    page.wait_for_selector(".result-row.done")
+    page.set_input_files("#fileInput", [str(td/"c-3.png")])
+    page.wait_for_function("document.querySelectorAll('.page-item').length === 3")
+    page.click(".page-item:nth-child(3) [data-act=up]"); page.click(".page-item:nth-child(2) [data-act=up]")
+    page.wait_for_timeout(700); page.wait_for_selector(".result-row.done")
+    names_ = page.eval_on_selector_all(".page-name", "e => e.map(x => x.textContent)")
+    if names_ != ["c-3.png", "a-1.png", "b-2.png"]: failures.append(f"combine: list order {names_}")
+    pdf_ = fetch_blob(page, page.get_attribute("#resultsList a.btn-primary", "href"))
+    rd = pypdf.PdfReader(io.BytesIO(pdf_))
+    dims_ = [(round(float(x.mediabox.width)), round(float(x.mediabox.height))) for x in rd.pages]
+    if dims_ != [(300, 300), (225, 150), (150, 225)]: failures.append(f"combine: PDF page order/sizes {dims_}")
+    page.click(".page-item:nth-child(1) [data-act=remove]")
+    if page.locator(".page-item").count() != 2: failures.append("combine: remove page failed")
+    print("ok  combine-images-to-pdf: reorder across drops, PDF pages", dims_)
+
     # rotate page defaults to 90°
     res = run_tool(page, "rotate-image", [A/"photo.jpg"], "jpg")
     im = check_image("rotate", res[0][1], "JPEG")
@@ -310,7 +348,7 @@ with sync_playwright() as p:
     # ---- 10b. BLOG: index, articles, structure, links, JSON-LD ----
     import re as _re2
     arts = sorted(f for f in (DIST / "blog").glob("*.html") if f.name != "index.html")
-    if len(arts) < 1: failures.append("blog: no articles built")
+    if len(arts) < 3: failures.append(f"blog: only {len(arts)} articles built")
     page.goto((DIST / "blog" / "index.html").as_uri())
     cards = page.query_selector_all(".post-card")
     if len(cards) != len(arts): failures.append(f"blog index: {len(cards)} cards vs {len(arts)} articles")
@@ -318,7 +356,7 @@ with sync_playwright() as p:
         page.goto(f.as_uri())
         txt = page.inner_text(".prose-body") if page.query_selector(".prose-body") else ""
         words = len(txt.split())
-        if words < 300: failures.append(f"{f.name}: only {words} words")
+        if words < 700: failures.append(f"{f.name}: only {words} words")
         if not page.query_selector("h1"): failures.append(f"{f.name}: no h1")
         h2s = page.query_selector_all(".prose-body h2")
         if len(h2s) < 3: failures.append(f"{f.name}: {len(h2s)} h2 headings")
@@ -345,6 +383,63 @@ with sync_playwright() as p:
         if _re2.search(r"(\*\*|:::|^## )", txt, _re2.M): failures.append(f"{f.name}: unrendered markdown in body")
         print(f"ok  blog/{f.name}: {words} words, {len(h2s)} sections, {len(page.query_selector_all('.tool-cta'))} CTAs")
     print(f"ok  blog: {len(arts)} articles + index")
+
+    # ---- 10b. compress-to-N-KB tools: output must be a JPEG at or under the limit, even offline ----
+    import numpy as _np
+    big = A / "big-noisy.jpg"
+    if not big.exists():
+        _rng = _np.random.default_rng(3)
+        _base = Image.open(A / "photo.png").convert("RGB").resize((3000, 2000))
+        _arr = _np.array(_base).astype(float) + _rng.normal(0, 5, (2000, 3000, 3))
+        Image.fromarray(_np.clip(_arr, 0, 255).astype("uint8")).save(big, quality=92)
+    for kb in (20, 50, 100, 200, 500):
+        slug = f"compress-image-to-{kb}kb"
+        page.context.set_offline(False)
+        page.goto((DIST / f"{slug}.html").as_uri()); page.wait_for_selector("#dropZone", timeout=5000)
+        page.context.set_offline(True)                      # the tool must not need the network
+        page.set_input_files("#fileInput", [str(big)])
+        page.wait_for_selector(".result-row.done, .result-row.error", timeout=60000)
+        page.wait_for_function("() => !document.querySelector('.result-row.pending')", timeout=60000)
+        row = page.query_selector("#resultsList .result-row")
+        if "error" in (row.get_attribute("class") or ""): failures.append(f"{slug}: error {row.inner_text()}"); continue
+        data = fetch_blob(page, row.query_selector("a.btn-primary").get_attribute("href"))
+        im = Image.open(io.BytesIO(data)); im.load()
+        if im.format != "JPEG": failures.append(f"{slug}: output is {im.format}")
+        if len(data) > kb * 1024: failures.append(f"{slug}: {len(data)} bytes is over {kb} KB")
+        print(f"ok  {slug}: {len(data)/1024:.1f} KB, {im.size[0]}x{im.size[1]}")
+    page.context.set_offline(False)
+
+    # ---- 10c. lossless WebP via the bundled libwebp WebAssembly encoder (needs http://, not file://) ----
+    import threading, functools, http.server
+    class _Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a): pass
+    _srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Quiet, directory=str(DIST)))
+    threading.Thread(target=_srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{_srv.server_address[1]}"
+    _ref = A / "photo.png"
+    import numpy as _np2
+    _a = _np2.array(Image.open(_ref).convert("RGBA")).astype(int)
+    for slug in ("png-to-webp", "compress-webp"):
+        pg2 = page.context.new_page()
+        pg2.route("**/*", lambda r: r.abort() if any(h in r.request.url for h in ("googletagmanager", "googlesyndication", "fonts.g")) else r.continue_())
+        pg2.goto(f"{base}/{slug}.html"); pg2.wait_for_selector("#dropZone")
+        pg2.evaluate("() => { const el = document.querySelector('.control-group input[type=range]'); el.value = 100; el.dispatchEvent(new Event('input', {bubbles:true})); }")
+        pg2.set_input_files("#fileInput", [str(_ref)])
+        pg2.wait_for_selector(".result-row.done, .result-row.error", timeout=60000)
+        pg2.wait_for_function("() => !document.querySelector('.result-row.pending')", timeout=60000)
+        row = pg2.query_selector("#resultsList .result-row")
+        if "error" in (row.get_attribute("class") or ""): failures.append(f"{slug} @100%: {row.inner_text()}"); pg2.close(); continue
+        data = fetch_blob(pg2, row.query_selector("a.btn-primary").get_attribute("href"))
+        im = Image.open(io.BytesIO(data)); im.load(); _b = _np2.array(im.convert("RGBA")).astype(int)
+        if im.format != "WEBP": failures.append(f"{slug} @100%: output is {im.format}")
+        _d = abs(_a - _b)[..., :3].max(axis=2)
+        if _d[_a[..., 3] == 255].max() != 0: failures.append(f"{slug} @100%: opaque pixels not identical")
+        if ((_a[..., 3] > 0) & (_a[..., 3] < 255)).any() and _d[(_a[..., 3] > 0) & (_a[..., 3] < 255)].max() > 2: failures.append(f"{slug} @100%: semi-transparent pixels off by more than 2")
+        if not (_a[..., 3] == _b[..., 3]).all(): failures.append(f"{slug} @100%: alpha channel changed")
+        if not pg2.evaluate("() => /Lossless|lossless/.test(document.body.innerText)"): failures.append(f"{slug}: lossless note missing")
+        print(f"ok  {slug} @100% quality: lossless WebP via libwebp, {len(data)/1024:.1f} KB")
+        pg2.close()
+    _srv.shutdown()
 
     # ---- 11. home search + theme toggle + mobile menu ----
     page.goto((DIST / "index.html").as_uri())
